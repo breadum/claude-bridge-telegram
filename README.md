@@ -1,103 +1,106 @@
 # claude-tg-bridge
 
-Drive Claude Code sessions from Telegram. Each session gets its own **forum
-topic** in a Telegram group: the session's responses stream into the topic, and
-anything you type back in that topic is injected into the session as its next
-instruction.
+Claude Code 세션을 텔레그램에서 조종하는 브리지. 세션마다 텔레그램 그룹 안에
+**포럼 토픽**이 하나씩 생기고 — 세션의 응답은 그 토픽으로 흘러나오고, 토픽에
+당신이 입력한 메시지는 세션의 다음 지시로 주입된다.
 
 ```
-Claude Code session ──Stop hook──▶ outbox/<sid>/ ──▶ broker ──▶ Telegram topic
-Telegram topic ──▶ broker (getUpdates) ──▶ inbox/<sid> ──Stop hook──▶ session
+Claude Code 세션 ──Stop 훅──▶ outbox/<sid>/ ──▶ 브로커 ──▶ 텔레그램 토픽
+텔레그램 토픽 ──▶ 브로커(getUpdates) ──▶ inbox/<sid> ──Stop 훅──▶ 세션
 ```
 
-- **Hooks** (`hooks/*.py`, stdlib only) run on every `SessionStart` / `Stop` /
-  `SessionEnd`. They only touch files under `~/.claude/bridge/`.
-- **Broker** (`bridge` daemon) is the only process that talks to Telegram. It
-  owns `getUpdates`, so multiple concurrent sessions never fight over the offset.
+- **훅** (`hooks/*.py`, 표준 라이브러리만 사용): `SessionStart` / `Stop` /
+  `SessionEnd` 세 이벤트에서 실행된다. `~/.claude/bridge/` 아래 파일만 건드린다.
+- **브로커** (`bridge` 데몬): 텔레그램과 통신하는 유일한 프로세스. `getUpdates`를
+  독점하므로 동시에 여러 세션이 돌아도 offset 경합이 없다.
 
-## Requirements
+> **`Stop` 훅이 뭔가?** — Claude Code가 한 턴의 응답을 **마친 직후** 실행되는 훅
+> 이다. 이름이 "Stop"이지만 세션을 멈추는 게 아니라 "응답 종료 시점"을 뜻한다.
+> 이 브리지의 핵심 동작(응답 내보내기 + 명령 주입)이 전부 여기서 일어난다.
+> Claude Code에 "PostHook" 같은 건 없고, 이 `Stop`이 그 역할이다.
 
-- Python 3.12 (pinned via `.python-version`, built with pyenv)
-- [uv](https://docs.astral.sh/uv/) for the project venv
-- A Telegram bot + a **supergroup with Topics enabled**
+## 요구 사항
 
-## 1. Create the Telegram bot & group
+- Python 3.12 (`.python-version`으로 고정, pyenv로 빌드)
+- 프로젝트 가상환경용 [uv](https://docs.astral.sh/uv/)
+- 텔레그램 봇 + **Topics(주제)가 켜진 슈퍼그룹**
 
-1. Talk to [@BotFather](https://t.me/BotFather) → `/newbot` → copy the **token**.
-2. Create a group. Open **group name → Edit → Topics** and turn it **on**, then
-   save. The group must actually show a topic list / "General" topic afterwards —
-   `getChat` must report `is_forum: true`.
-3. **Add the bot to the group, then promote it to admin.** In the admin-rights
-   screen you must explicitly enable **Manage Topics** (it is often off by
-   default even for an admin). Being an admin also lets the bot see every
-   message (bypasses privacy mode).
-4. Send a message in the group **after** the bot is an admin — messages from
-   before it joined / was promoted are never delivered to it.
+## 1. 텔레그램 봇 & 그룹 만들기
 
-If any of this is wrong you'll see it during `bridge setup` / in the broker log:
-`is_forum: None`, `the chat is not a forum`, or `not enough rights to create a
-topic`. See [Troubleshooting](#troubleshooting).
+1. [@BotFather](https://t.me/BotFather) → `/newbot` → **토큰** 복사.
+2. 그룹을 만든다. **그룹 이름 → 편집 → Topics**를 켜고 저장한다. 저장 후 그룹에
+   토픽 목록 / "General" 토픽이 실제로 보여야 한다 — `getChat`이 `is_forum: true`
+   를 반환해야 한다.
+3. **봇을 그룹에 추가한 뒤 관리자로 승격**한다. 관리자 권한 화면에서 **주제 관리
+   (Manage Topics)**를 반드시 직접 켜야 한다 (관리자라도 기본은 꺼져 있는 경우가
+   많다). 관리자가 되면 봇이 모든 메시지를 볼 수 있다 (privacy mode 우회).
+4. 봇이 관리자가 **된 뒤에** 그룹에 메시지를 하나 보낸다 — 봇이 합류/승격되기
+   전의 메시지는 봇에게 전달되지 않는다.
 
-## 2. Install
+이 중 뭔가 잘못되면 `bridge setup` 또는 브로커 로그에서 바로 드러난다:
+`is_forum: None`, `the chat is not a forum`, `not enough rights to create a
+topic`. → [문제 해결](#문제-해결) 참고.
+
+## 2. 설치
 
 ```bash
 cd ~/claude-tg-bridge
-uv sync                      # create .venv from the lockfile
-uv run bridge setup          # paste token, auto-detects the group chat id
-uv run bridge start          # launch the broker daemon
-uv run bridge install-hooks  # add hooks to ~/.claude/settings.json (backs it up)
+uv sync                      # 락파일로 .venv 생성
+uv run bridge setup          # 토큰 붙여넣기, 그룹 chat_id 자동 탐지
+uv run bridge start          # 브로커 데몬 실행
+uv run bridge install-hooks  # ~/.claude/settings.json에 훅 추가 (자동 백업)
 ```
 
-Optionally put `bridge` on PATH: `uv tool install --editable ~/claude-tg-bridge`.
+`bridge`를 PATH에 올리려면: `uv tool install --editable ~/claude-tg-bridge`.
 
-## 3. Use
+## 3. 사용
 
-Start a Claude Code session anywhere. A topic named like `myrepo-3f2a`
-(`<cwd basename>-<session id prefix>`) appears in the group with a header line.
+아무 디렉터리에서 Claude Code 세션을 시작한다. `myrepo-3f2a`
+(`<디렉터리명>-<세션ID 앞 4자리>`) 형태의 토픽이 헤더 메시지와 함께 그룹에
+나타난다.
 
-- The session's every reply shows up in that topic.
-- Type a message in the topic → it becomes the session's next instruction.
-- The **first** message you send *arms* the session (see below).
+- 세션의 모든 응답이 그 토픽에 표시된다.
+- 토픽에 메시지를 입력하면 → 세션의 다음 지시가 된다.
+- **첫 메시지**를 보내면 세션이 *arm* 된다 (아래 참고).
 
-### Armed vs. un-armed
+### armed / un-armed
 
-After each turn the `Stop` hook waits for a command before letting the session
-go idle:
+매 턴이 끝나면 `Stop` 훅은 세션을 idle로 보내기 전에 명령을 기다린다:
 
-| state | wait | why |
+| 상태 | 대기 시간 | 이유 |
 |---|---|---|
-| **un-armed** (default) | `grace_seconds` (5s) | so normal terminal use isn't blocked |
-| **armed** | `poll_minutes` (5m) | so you can drive it entirely from Telegram |
+| **un-armed** (기본) | `grace_seconds` (5초) | 일반 터미널 사용을 오래 막지 않도록 |
+| **armed** | `poll_minutes` (5분) | 텔레그램만으로 세션을 끝까지 조종할 수 있도록 |
 
-Sending any command arms the session automatically. `/disarm` returns it to
-terminal-friendly mode; `/arm` forces armed mode.
+명령을 한 번 보내면 자동으로 arm 된다. `/disarm`으로 터미널 친화 모드로 되돌리고,
+`/arm`으로 강제 arm 한다.
 
-> While the hook is waiting, that session's terminal is busy ("thinking"). If a
-> session goes idle before your message arrives, press Enter in its terminal to
-> let the next `Stop` hook pick the command up.
+> 훅이 대기하는 동안 해당 세션 터미널은 "생각 중" 상태로 묶인다. 메시지가 도착하기
+> 전에 세션이 idle로 빠졌다면, 그 터미널에서 엔터를 한 번 눌러 다음 `Stop` 훅이
+> 명령을 집어가게 하면 된다.
 
-### Topic commands
+### 토픽 명령
 
-| command | effect |
+| 명령 | 효과 |
 |---|---|
-| `/status` | label, armed/paused state, queued command count |
-| `/arm` / `/disarm` | toggle the long wait window |
-| `/pause` / `/resume` | hold / release queued commands |
-| `/stop` | stop injecting into this session |
-| `/sessions` | list all known sessions |
-| `/help` | this list |
+| `/status` | 라벨, armed/paused 상태, 대기 중인 명령 수 |
+| `/arm` / `/disarm` | 긴 대기 창 켜기 / 끄기 |
+| `/pause` / `/resume` | 명령 보류 / 재개 |
+| `/stop` | 이 세션에 대한 명령 주입 중단 |
+| `/sessions` | 알려진 모든 세션 목록 |
+| `/help` | 이 목록 |
 
-## Managing the broker
+## 브로커 관리
 
 ```bash
-uv run bridge status      # broker + per-session state
-uv run bridge logs -f     # tail ~/.claude/bridge/state/broker.log
+uv run bridge status      # 브로커 + 세션별 상태
+uv run bridge logs -f     # ~/.claude/bridge/state/broker.log tail
 uv run bridge restart
 uv run bridge stop
 uv run bridge uninstall-hooks
 ```
 
-### Keep the broker always running (systemd --user)
+### 브로커를 항상 켜두기 (systemd --user)
 
 ```ini
 # ~/.config/systemd/user/claude-tg-bridge.service
@@ -121,130 +124,133 @@ WantedBy=default.target
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now claude-tg-bridge.service
-loginctl enable-linger "$USER"     # keep it running with no login / after reboot
+loginctl enable-linger "$USER"     # 로그인 없이 / 재부팅 후에도 계속 실행
 ```
 
-Manage it:
+관리:
 
 ```bash
 systemctl --user status  claude-tg-bridge.service
-systemctl --user restart claude-tg-bridge.service   # after a code change
-journalctl --user -u claude-tg-bridge.service -f    # or: bridge logs -f
+systemctl --user restart claude-tg-bridge.service   # 코드 수정 후
+journalctl --user -u claude-tg-bridge.service -f    # 또는: bridge logs -f
 ```
 
-Once it's a service, control it with `systemctl --user`, not `bridge start/stop`
-(they'd fight over the pidfile).
+서비스로 돌리는 동안엔 `bridge start/stop` 대신 `systemctl --user`로 제어한다
+(pidfile을 두고 서로 충돌한다).
 
-## Configuration
+## 설정
 
-`bridge setup` writes `~/.claude/bridge/config.json`:
+`bridge setup`이 `~/.claude/bridge/config.json`을 쓴다:
 
-| key | default | meaning |
+| 키 | 기본값 | 의미 |
 |---|---|---|
-| `bot_token` | – | Telegram bot token |
-| `chat_id` | – | supergroup id (negative, `-100…`) |
-| `poll_minutes` | 5 | armed `Stop` hook wait |
-| `grace_seconds` | 5 | un-armed `Stop` hook wait |
-| `max_reinjections` | 50 | safety cap on consecutive injections per session |
+| `bot_token` | – | 텔레그램 봇 토큰 |
+| `chat_id` | – | 슈퍼그룹 ID (음수, `-100…`) |
+| `poll_minutes` | 5 | armed 상태 `Stop` 훅 대기 (분) |
+| `grace_seconds` | 5 | un-armed 상태 `Stop` 훅 대기 (초) |
+| `max_reinjections` | 50 | 세션당 연속 주입 안전 상한 |
 
-Each key can be overridden by an env var: `CLAUDE_TG_BOT_TOKEN`,
+각 키는 환경 변수로 덮어쓸 수 있다: `CLAUDE_TG_BOT_TOKEN`,
 `CLAUDE_TG_CHAT_ID`, `CLAUDE_TG_POLL_MINUTES`, `CLAUDE_TG_GRACE_SECONDS`,
-`CLAUDE_TG_MAX_REINJECTIONS`. `CLAUDE_TG_BRIDGE_HOME` relocates the whole state
-directory (used by the test suite).
+`CLAUDE_TG_MAX_REINJECTIONS`. `CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를
+옮긴다 (테스트에서 사용).
 
-## Layout
+> **그룹 이름을 바꿔도 설정은 그대로다.** 브리지는 `chat_id`(숫자)만 쓰고 그룹
+> 제목은 읽지 않는다. 세션별 토픽 이름을 텔레그램에서 바꿔도 무관하다 (라우팅은
+> `message_thread_id` 기준). config를 바꿔야 하는 경우는 그룹을 삭제하고 새로
+> 만들 때뿐이다.
+
+## 디렉터리 구조
 
 ```
-~/claude-tg-bridge/            # code
+~/claude-tg-bridge/            # 코드
   src/claude_tg_bridge/        # broker, cli, telegram client, config
-  hooks/                       # session_start.py, stop.py, session_end.py (stdlib only)
+  hooks/                       # session_start.py, stop.py, session_end.py (stdlib 전용)
 
-~/.claude/bridge/              # runtime state (shared by broker + hooks)
+~/.claude/bridge/              # 런타임 상태 (브로커 + 훅 공유)
   config.json
   state/{offset, broker.pid, broker.log}
-  register/<sid>.json          # session_start -> broker creates a topic
+  register/<sid>.json          # session_start → 브로커가 토픽 생성
   sessions/<sid>.json          # label, thread_id, status, armed, paused
-  threads/<tid>                # -> sid
-  inbox/<sid>.jsonl            # queued commands
-  outbox/<sid>/<ts>.txt        # queued responses
-  end/<sid>.json               # session_end -> broker marks ended
+  threads/<tid>                # → sid
+  inbox/<sid>.jsonl            # 대기 중인 명령
+  outbox/<sid>/<ts>.txt        # 대기 중인 응답
+  end/<sid>.json               # session_end → 브로커가 종료 표시
 ```
 
-## Limitations
+## 한계
 
-- Commands are consumed only when a turn ends (`Stop`). No mid-turn interrupt.
-- A truly idle session (hook already timed out) needs one Enter in its terminal
-  to resume.
-- The bridge injects commands as a *user would*: it can run anything the session
-  can. Only add the bot to a group you control, and keep the token secret.
+- 명령은 턴이 끝날 때(`Stop`)만 소비된다. 턴 도중 인터럽트는 불가.
+- 완전히 idle이 된 세션(훅이 이미 타임아웃)은 그 터미널에서 엔터를 한 번 눌러야
+  재개된다.
+- 브리지는 *사용자가 하듯이* 명령을 주입한다 — 세션이 할 수 있는 건 다 할 수
+  있다. 본인이 통제하는 그룹에만 봇을 넣고, 토큰은 비밀로 유지할 것.
 
-## Troubleshooting
+## 문제 해결
 
 **`is_forum: None` / `the chat is not a forum`**
-Topics isn't actually enabled on the group. Group name → Edit → Topics → on →
-save. Confirm the group now shows a topic list.
+그룹에 Topics가 실제로 안 켜져 있다. 그룹 이름 → 편집 → Topics → 켜기 → 저장.
+그룹에 토픽 목록이 보이는지 확인.
 
 **`not enough rights to create a topic`**
-The bot is an admin but without *Manage Topics*. Group → admins → the bot →
-enable **Manage Topics** → save. Check with:
+봇이 관리자지만 *주제 관리(Manage Topics)* 권한이 없다. 그룹 → 관리자 → 봇 →
+**주제 관리** 켜기 → 저장. 확인:
 ```bash
 uv run python -c "import httpx;from claude_tg_bridge.config import Config as C;c=C.load();b=f'https://api.telegram.org/bot{c.bot_token}';me=httpx.get(f'{b}/getMe').json()['result']['id'];print(httpx.get(f'{b}/getChatMember',params={'chat_id':c.chat_id,'user_id':me}).json()['result'].get('can_manage_topics'))"
 ```
 
-**Bot sees no messages (`0 update(s)` during setup)**
-Privacy mode + not an admin yet, or the message predates the bot joining. Make
-it an admin, then send a *new* message.
+**봇이 메시지를 못 받음 (`setup` 중 `0 update(s)`)**
+privacy mode + 아직 관리자 아님, 또는 봇 합류 이전 메시지다. 관리자로 만든 뒤
+*새* 메시지를 보낸다.
 
-**A session's replies show up in the group's *General* topic**
-That session started **before** `bridge install-hooks`, so its `SessionStart`
-never registered a topic. Current builds keep the `Stop` hook silent for
-unregistered sessions; just start a fresh `claude` session. Delete the stray
-General messages by hand.
+**세션 응답이 그룹의 *General* 토픽에 표시됨**
+그 세션이 `bridge install-hooks` **이전에** 시작돼서 `SessionStart`가 토픽을
+등록하지 못했다. 현재 빌드는 등록되지 않은 세션에 대해 `Stop` 훅이 침묵한다 —
+새 `claude` 세션을 시작하면 된다. General에 남은 메시지는 직접 삭제.
 
-**Every turn pauses ~5s before finishing**
-Expected: the un-armed `Stop` hook glances for a command for `grace_seconds`.
-Lower it in `~/.claude/bridge/config.json` (e.g. `2`, or `0` to disable the
-glance entirely) — the hook re-reads config each turn, no restart needed. Only
-registered/bridged sessions are affected; sessions with no topic return
-instantly.
+**매 턴이 끝날 때 ~5초 멈춤**
+정상이다. un-armed `Stop` 훅이 `grace_seconds` 동안 명령을 살핀다.
+`~/.claude/bridge/config.json`에서 낮추면 된다 (예: `2`, 또는 `0`으로 완전히
+끄기) — 훅이 매 턴 config를 다시 읽으므로 재시작 불필요. 등록된(브리지된) 세션만
+영향을 받고, 토픽이 없는 세션은 즉시 반환한다.
 
-**Broker won't start: `broker already running`**
-Stale pidfile or a real one. `systemctl --user status claude-tg-bridge` (if using
-the service) or `cat ~/.claude/bridge/state/broker.pid`. If nothing is running,
+**브로커가 안 뜸: `broker already running`**
+stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
+`systemctl --user status claude-tg-bridge`, 아니면
+`cat ~/.claude/bridge/state/broker.pid`. 아무것도 안 돌고 있으면
 `rm ~/.claude/bridge/state/broker.pid`.
 
-**After editing broker code**
-`systemctl --user restart claude-tg-bridge.service` (or `bridge restart` if you
-run it by hand). Hook scripts are re-read each invocation — no restart needed.
+**브로커 코드를 수정한 뒤**
+`systemctl --user restart claude-tg-bridge.service` (직접 실행 중이면
+`bridge restart`). 훅 스크립트는 매 호출마다 다시 읽으므로 재시작 불필요.
 
-## This machine (`host`) — current setup
+## 이 머신 (`host`) — 현재 설정
 
-Everything already wired on this host, so it can be managed without re-deriving it:
+이 호스트에 이미 구성된 것들. 다시 파악할 필요 없이 관리할 수 있도록 정리:
 
-| thing | where |
+| 항목 | 위치 |
 |---|---|
-| Code | `~/claude-tg-bridge/` (venv at `.venv/`, Python 3.12.14 via pyenv) |
-| Runtime state | `~/.claude/bridge/` |
-| Config | `~/.claude/bridge/config.json` — bot `@example_bot`, group **"YourGroup"** (`chat_id -100XXXXXXXXXXX`) |
-| Hooks | installed into `~/.claude/settings.json` (SessionStart / Stop / SessionEnd). Backups: `~/.claude/settings.json.bak-*` |
-| Broker service | `~/.config/systemd/user/claude-tg-bridge.service`, **enabled + linger on** — runs at boot, no login needed |
-| Shell | pyenv init block appended to `~/.zshrc` |
+| 코드 | `~/claude-tg-bridge/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
+| 런타임 상태 | `~/.claude/bridge/` |
+| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`) |
+| 훅 | `~/.claude/settings.json`에 설치됨 (SessionStart / Stop / SessionEnd). 백업: `~/.claude/settings.json.bak-*` |
+| 브로커 서비스 | `~/.config/systemd/user/claude-tg-bridge.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
+| 셸 | `~/.zshrc`에 pyenv init 블록 추가됨 |
 
-Day-to-day:
+일상 관리:
 
 ```bash
-systemctl --user status claude-tg-bridge.service        # is it up?
-journalctl --user -u claude-tg-bridge.service -f        # live log
-systemctl --user restart claude-tg-bridge.service       # after pulling code changes
-~/claude-tg-bridge/.venv/bin/bridge status              # broker + per-session view
+systemctl --user status claude-tg-bridge.service        # 살아있나?
+journalctl --user -u claude-tg-bridge.service -f        # 실시간 로그
+systemctl --user restart claude-tg-bridge.service       # 코드 변경 반영
+~/claude-tg-bridge/.venv/bin/bridge status              # 브로커 + 세션별 뷰
 ```
 
-To rotate the bot token: edit `~/.claude/bridge/config.json`, then restart the
-service. To tear the whole thing down:
+봇 토큰 교체: `~/.claude/bridge/config.json` 수정 후 서비스 재시작. 전체 제거:
 
 ```bash
 systemctl --user disable --now claude-tg-bridge.service
 rm ~/.config/systemd/user/claude-tg-bridge.service
-~/claude-tg-bridge/.venv/bin/bridge uninstall-hooks     # restores settings.json (with backup)
-# optional: loginctl disable-linger "$USER"; rm -rf ~/.claude/bridge
+~/claude-tg-bridge/.venv/bin/bridge uninstall-hooks     # settings.json 복원 (백업됨)
+# 선택: loginctl disable-linger "$USER"; rm -rf ~/.claude/bridge
 ```
