@@ -1,0 +1,33 @@
+[project]
+name = "claude-tg-bridge"
+version = "0.1.0"
+description = "Bridge Claude Code sessions to Telegram forum topics: stream responses out, inject commands back in."
+readme = "README.md"
+authors = [
+    { name = "breadum", email = "breadum.kr@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+]
+
+[project.scripts]
+bridge = "claude_tg_bridge.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# PYI034: __enter__ returning the class name (not Self) is fine here.
+# SIM115: the daemon keeps a log file handle open for the child process.
+ignore = ["PYI034", "SIM115"]
