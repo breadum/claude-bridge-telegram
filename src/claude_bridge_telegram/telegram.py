@@ -83,6 +83,19 @@ class Telegram:
         res = self._call("createForumTopic", chat_id=chat_id, name=name[:128])
         return int(res["message_thread_id"])
 
+    def edit_forum_topic(self, chat_id: int, message_thread_id: int, name: str) -> bool:
+        """Rename a topic. Returns False if it failed (gone / no rights)."""
+        try:
+            self._call(
+                "editForumTopic",
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                name=name[:128],
+            )
+            return True
+        except TelegramError:
+            return False
+
     def close_forum_topic(self, chat_id: int, message_thread_id: int) -> None:
         try:
             self._call(

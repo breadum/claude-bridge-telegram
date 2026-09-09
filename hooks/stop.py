@@ -3,7 +3,7 @@
 command to inject back into the session.
 
 Flow per call:
-  1. write the final assistant text to outbox/<sid>/<ts>.txt (broker sends it)
+  1. queue the final assistant text in outbox/<sid>/ (broker sends it to the topic)
   2. if the session is "armed" (a command has been sent from Telegram, or
      /arm was used) wait up to poll_minutes for the next command; otherwise
      only glance for grace_seconds so normal terminal use isn't blocked
@@ -22,10 +22,7 @@ import _bridge_common as bc
 
 
 def push_response(sid: str, transcript_path: str) -> None:
-    text = bc.last_assistant_text(transcript_path)
-    outdir = bc.OUTBOX / sid
-    outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / f"{bc.ts()}.txt").write_text(text)
+    bc.queue_outbox(sid, "assistant", bc.last_assistant_text(transcript_path))
 
 
 def bump_counter(sid: str) -> int:
@@ -141,9 +138,7 @@ def _count(sid: str) -> int:
 
 
 def _note(sid: str, msg: str) -> None:
-    outdir = bc.OUTBOX / sid
-    outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / f"{bc.ts()}_note.txt").write_text("⚠️ " + msg)
+    bc.queue_outbox(sid, "note", msg)
 
 
 if __name__ == "__main__":

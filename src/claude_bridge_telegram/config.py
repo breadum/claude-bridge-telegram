@@ -34,6 +34,11 @@ class Config:
     # Telegram topic. Default: keep the topic (delete it later with /close or
     # `bridge prune`).
     delete_topic_on_end: bool = False
+    # When true, a session is "armed" from the moment it registers, so the very
+    # first Stop hook already waits `poll_minutes` for a Telegram command
+    # (instead of only `grace_seconds`). Turn this on for Telegram-driven
+    # sessions; leave it off if you mostly work in the terminal.
+    arm_on_start: bool = False
 
     @classmethod
     def load(cls) -> Config:
@@ -54,6 +59,8 @@ class Config:
             cfg.max_reinjections = int(v)
         if v := os.environ.get("CLAUDE_TG_DELETE_TOPIC_ON_END"):
             cfg.delete_topic_on_end = v.lower() in ("1", "true", "yes")
+        if v := os.environ.get("CLAUDE_TG_ARM_ON_START"):
+            cfg.arm_on_start = v.lower() in ("1", "true", "yes")
         return cfg
 
     def save(self) -> None:

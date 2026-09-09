@@ -11,6 +11,7 @@ import contextlib
 import fcntl
 import json
 import os
+import secrets
 import sys
 import time
 from pathlib import Path
@@ -49,6 +50,17 @@ def session_file(sid: str) -> Path:
 
 def counter_file(sid: str) -> Path:
     return COUNTERS / sid
+
+
+def queue_outbox(sid: str, role: str, text: str) -> None:
+    """Drop a message for the broker to deliver to this session's topic.
+    role: "user" | "assistant" | "note". Filenames sort chronologically."""
+    d = OUTBOX / sid
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{ts()}-{secrets.token_hex(2)}.json"
+    (d / name).write_text(
+        json.dumps({"role": role, "text": text}, ensure_ascii=False)
+    )
 
 
 # --------------------------------------------------------------------------

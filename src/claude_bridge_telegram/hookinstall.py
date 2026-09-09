@@ -20,6 +20,7 @@ SETTINGS = Path.home() / ".claude" / "settings.json"
 # needs a generous timeout; keep poll_minutes comfortably under this.
 HOOKS = {
     "SessionStart": ("session_start.py", None),
+    "UserPromptSubmit": ("user_prompt_submit.py", None),
     "Stop": ("stop.py", 3600),
     "SessionEnd": ("session_end.py", None),
 }

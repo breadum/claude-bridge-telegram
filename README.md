@@ -77,21 +77,36 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (자동 �
 - 토픽에 메시지를 입력하면 → 세션의 다음 지시가 된다.
 - **첫 메시지**를 보내면 세션이 *arm* 된다 (아래 참고).
 
-### armed / un-armed
+### 텔레그램 메시지가 세션에 언제 들어가나 (중요)
 
-매 턴이 끝나면 `Stop` 훅은 세션을 idle로 보내기 전에 명령을 기다린다:
+텔레그램 토픽에 쓴 메시지는 브로커가 바로 `inbox/<sid>`에 넣지만, **세션에
+주입되는 건 `Stop` 훅이 실행 중일 때뿐이다** (= Claude가 한 턴을 막 끝냈을 때).
+Claude가 아무것도 안 하고 idle이면 `Stop` 훅도 안 돌기 때문에, 메시지는 큐에
+쌓인 채 **다음 턴까지 대기**한다.
 
-| 상태 | 대기 시간 | 이유 |
+그래서 매 턴이 끝나면 `Stop` 훅은 세션을 idle로 보내기 전에 잠깐 기다린다:
+
+| 상태 | 대기 시간 | 용도 |
 |---|---|---|
-| **un-armed** (기본) | `grace_seconds` (5초) | 일반 터미널 사용을 오래 막지 않도록 |
-| **armed** | `poll_minutes` (5분) | 텔레그램만으로 세션을 끝까지 조종할 수 있도록 |
+| **un-armed** | `grace_seconds` (5초) | 주로 터미널에서 작업, 텔레그램은 가끔 |
+| **armed** | `poll_minutes` (기본 5분, leaf는 30분) | 텔레그램으로 세션을 계속 조종 |
 
-명령을 한 번 보내면 자동으로 arm 된다. `/disarm`으로 터미널 친화 모드로 되돌리고,
-`/arm`으로 강제 arm 한다.
+- 텔레그램 메시지를 한 번 보내면 자동으로 arm 된다. `/arm` / `/disarm`으로 수동 전환.
+- `arm_on_start: true` (설정)면 세션이 **시작부터 armed**라 첫 턴부터 긴 창이 열린다.
 
-> 훅이 대기하는 동안 해당 세션 터미널은 "생각 중" 상태로 묶인다. 메시지가 도착하기
-> 전에 세션이 idle로 빠졌다면, 그 터미널에서 엔터를 한 번 눌러 다음 `Stop` 훅이
-> 명령을 집어가게 하면 된다.
+**텔레그램만으로 세션을 몰고 가려면:**
+
+1. 터미널에서 `claude` 시작 → 토픽 생성됨
+2. **첫 지시는 터미널에 입력** (아직 `Stop` 훅이 안 돌아서 텔레그램 첫 메시지는
+   큐에만 쌓임)
+3. Claude가 답하면 → `Stop` 훅이 `poll_minutes`만큼 대기 시작 → 이때부터
+   텔레그램 메시지가 몇 초 안에 주입된다
+4. Claude가 답할 때마다 창이 다시 열린다. `poll_minutes` 안에 답장하면 끊김 없이
+   이어진다.
+
+> 대기 중엔 그 터미널이 "생각 중"으로 묶인다. 터미널을 되찾으려면 토픽에서
+> `/disarm` 또는 `/stop`. 이미 idle로 빠진 세션에 큐가 쌓였으면, 그 터미널에서
+> 아무 메시지나 한 번 보내면 큐가 바로 흘러들어간다.
 
 ### 토픽 명령
 
@@ -102,8 +117,13 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (자동 �
 | `/pause` / `/resume` | 명령 보류 / 재개 |
 | `/stop` | 이 세션에 대한 명령 주입 중단 (토픽은 남김) |
 | `/close` | `/stop` 한 뒤 **이 토픽을 삭제**하고 세션 상태 정리 |
+| `/title <text>` | 이 토픽 이름 변경 (첫 질문으로 자동 지정되지만 수동 덮어쓰기) |
 | `/sessions` | 알려진 모든 세션 목록 |
 | `/help` | 이 목록 |
+
+토픽 이름은 **세션의 첫 질문**으로 자동 지정된다 (`<디렉터리>: <질문>`). 그
+전까지는 `<디렉터리> …`. 사용자가 보낸 질문(`🧑`)과 Claude 답변(`🤖`)이 모두
+토픽에 미러링된다.
 
 ### 세션 종료 / 토픽 정리
 
@@ -169,11 +189,17 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 | `grace_seconds` | 5 | un-armed 상태 `Stop` 훅 대기 (초) |
 | `max_reinjections` | 50 | 세션당 연속 주입 안전 상한 |
 | `delete_topic_on_end` | `false` | 세션 종료 시 토픽도 삭제할지. `false`면 토픽은 남고 나중에 `/close`·`bridge prune`으로 정리 |
+| `arm_on_start` | `false` | 세션을 시작부터 armed로. 텔레그램 주도 사용이면 `true` |
 
 각 키는 환경 변수로 덮어쓸 수 있다: `CLAUDE_TG_BOT_TOKEN`,
 `CLAUDE_TG_CHAT_ID`, `CLAUDE_TG_POLL_MINUTES`, `CLAUDE_TG_GRACE_SECONDS`,
-`CLAUDE_TG_MAX_REINJECTIONS`, `CLAUDE_TG_DELETE_TOPIC_ON_END`.
+`CLAUDE_TG_MAX_REINJECTIONS`, `CLAUDE_TG_DELETE_TOPIC_ON_END`,
+`CLAUDE_TG_ARM_ON_START`.
 `CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를 옮긴다 (테스트에서 사용).
+
+> `poll_minutes`는 `Stop` 훅 타임아웃(`deploy` 시 3600초)보다 작아야 한다.
+> 더 길게 쓰려면 `bridge install-hooks`가 넣는 `timeout` 값도 같이 올려야 한다
+> (`hookinstall.py`).
 
 > **그룹 이름을 바꿔도 설정은 그대로다.** 브리지는 `chat_id`(숫자)만 쓰고 그룹
 > 제목은 읽지 않는다. 세션별 토픽 이름을 텔레그램에서 바꿔도 무관하다 (라우팅은
@@ -252,7 +278,7 @@ stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
 |---|---|
 | 코드 | `~/claude-bridge-telegram/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
 | 런타임 상태 | `~/.claude/bridge/` |
-| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`), `delete_topic_on_end: true` (세션 종료 시 토픽 자동 삭제) |
+| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`). `delete_topic_on_end: true`, `arm_on_start: true`, `poll_minutes: 30` |
 | 훅 | `~/.claude/settings.json`에 설치됨 (SessionStart / Stop / SessionEnd). 백업: `~/.claude/settings.json.bak-*` |
 | 브로커 서비스 | `~/.config/systemd/user/claude-bridge-telegram.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
 | 셸 | `~/.zshrc`에 pyenv init 블록 추가됨 |

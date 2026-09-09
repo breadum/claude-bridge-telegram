@@ -34,7 +34,7 @@ log = logging.getLogger("bridge.broker")
 POLL_TIMEOUT = 10
 SPECIAL = {
     "/stop", "/pause", "/resume", "/status", "/sessions",
-    "/help", "/arm", "/disarm", "/close",
+    "/help", "/arm", "/disarm", "/close", "/title",
 }
 
 
@@ -179,8 +179,11 @@ class Broker:
                 continue
             label = req.get("label") or sid[:12]
             cwd = req.get("cwd", "?")
+            base = req.get("base") or label
+            # Start with a plain, readable name; the first user prompt renames it.
+            initial = f"{base} …"
             try:
-                thread_id = self.tg.create_forum_topic(self.cfg.chat_id, label)
+                thread_id = self.tg.create_forum_topic(self.cfg.chat_id, initial)
             except TelegramError as e:
                 log.error("createForumTopic failed for %s: %s", sid, e)
                 send_with_retry(
@@ -193,23 +196,24 @@ class Broker:
             rec = {
                 "session_id": sid,
                 "label": label,
+                "base": base,
                 "cwd": cwd,
                 "thread_id": thread_id,
                 "status": "active",
                 "paused": False,
+                "armed": self.cfg.arm_on_start,
+                "titled": False,
                 "started": _now(),
             }
             _write_session(sid, rec)
             paths.thread_file(thread_id).write_text(sid)
             f.unlink(missing_ok=True)
             header = (
-                f"🟢 session {label}\n"
+                f"🟢 {base}\n"
                 f"cwd: {cwd}\n"
-                f"id: {sid}\n"
-                f"started: {rec['started']}\n\n"
-                "Reply in this topic to send a command "
-                "(the first one arms the session).\n"
-                "/status  /arm  /disarm  /pause  /resume  /stop"
+                f"id: {sid}\n\n"
+                "여기에 답장하면 이 세션의 다음 지시가 됩니다 (첫 메시지가 세션을 arm).\n"
+                "/status  /arm  /disarm  /pause  /resume  /stop  /close  /title <text>"
             )
             send_with_retry(self.tg, self.cfg.chat_id, header, message_thread_id=thread_id)
             log.info("registered %s -> topic %s", label, thread_id)
@@ -264,14 +268,24 @@ class Broker:
         if head == "/help":
             self._say(
                 thread_id,
-                "/status   show state\n"
-                "/arm      wait full poll window for commands\n"
-                "/disarm   only glance briefly (frees the terminal)\n"
-                "/pause    hold commands until /resume\n"
-                "/resume   deliver held commands\n"
-                "/stop     stop injecting into this session\n"
-                "/close    stop, then delete this topic",
+                "/status        show state\n"
+                "/arm           wait full poll window for commands\n"
+                "/disarm        only glance briefly (frees the terminal)\n"
+                "/pause         hold commands until /resume\n"
+                "/resume        deliver held commands\n"
+                "/stop          stop injecting into this session\n"
+                "/close         stop, then delete this topic\n"
+                "/title <text>  rename this topic",
             )
+        elif head == "/title":
+            new = cmd[len("/title"):].strip()
+            if not new:
+                self._say(thread_id, "usage: /title <new topic name>")
+            elif self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, new[:128]):
+                rec["titled"] = True
+                _write_session(sid, rec)
+            else:
+                self._say(thread_id, "couldn't rename the topic.")
         elif head == "/status":
             n = _inbox_len(sid)
             self._say(
@@ -330,11 +344,30 @@ class Broker:
                 continue
             sid = sdir.name
             rec = _read_session(sid)
-            thread_id = rec["thread_id"] if rec else None
-            for f in sorted(sdir.glob("*.txt")):
-                text = f.read_text()
+            if rec is None:
+                # No session record. If a registration is still pending, hold the
+                # files (topic is about to exist). Otherwise it's an orphan left
+                # by a closed/ended session — drop it.
+                if not (paths.REGISTER / f"{sid}.json").exists():
+                    for x in sdir.iterdir():
+                        x.unlink(missing_ok=True)
+                    sdir.rmdir()
+                continue
+            thread_id = rec["thread_id"]
+            for f in sorted([*sdir.glob("*.json"), *sdir.glob("*.txt")]):
+                role, text = _read_outbox_item(f)
+                # first user prompt -> use it as the topic title
+                if role == "user" and rec and not rec.get("titled") and thread_id:
+                    title = _topic_title(rec.get("base", rec.get("label", "")), text)
+                    if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, title):
+                        rec["titled"] = True
+                        _write_session(sid, rec)
+                        log.info("titled topic %s: %s", thread_id, title)
                 ok = send_with_retry(
-                    self.tg, self.cfg.chat_id, text, message_thread_id=thread_id
+                    self.tg,
+                    self.cfg.chat_id,
+                    _format_outbox(role, text),
+                    message_thread_id=thread_id,
                 )
                 if ok:
                     f.unlink(missing_ok=True)
@@ -374,6 +407,34 @@ def _inbox_len(sid: str) -> int:
     if not f.exists():
         return 0
     return sum(1 for line in f.read_text().splitlines() if line.strip())
+
+
+_ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ "}
+
+
+def _read_outbox_item(path: Path) -> tuple[str, str]:
+    """Return (role, text) for an outbox file. Legacy .txt = assistant text."""
+    raw = path.read_text()
+    if path.suffix == ".json":
+        try:
+            obj = json.loads(raw)
+            return str(obj.get("role", "assistant")), str(obj.get("text", ""))
+        except (json.JSONDecodeError, AttributeError):
+            return "assistant", raw
+    return "assistant", raw
+
+
+def _format_outbox(role: str, text: str) -> str:
+    return _ROLE_PREFIX.get(role, "") + (text if text.strip() else "(empty)")
+
+
+def _topic_title(base: str, prompt: str) -> str:
+    """`<cwd>: <first line of the prompt>` trimmed for a forum topic name."""
+    line = " ".join(prompt.split())
+    if len(line) > 90:
+        line = line[:89].rstrip() + "…"
+    title = f"{base}: {line}" if base else line
+    return title[:128] or base or "session"
 
 
 def _sessions_summary() -> str:

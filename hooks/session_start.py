@@ -12,11 +12,12 @@ import os
 import _bridge_common as bc
 
 
-def make_label(cwd: str, sid: str) -> str:
-    base = os.path.basename(cwd.rstrip("/")) or "session"
-    label = f"{base}-{sid[:4]}"
-    label = "".join(ch for ch in label if ch.isprintable() and ch not in "\r\n")
-    return label[:120]
+def _clean(s: str) -> str:
+    return "".join(ch for ch in s if ch.isprintable() and ch not in "\r\n")
+
+
+def cwd_base(cwd: str) -> str:
+    return _clean(os.path.basename(cwd.rstrip("/")) or "session")[:60]
 
 
 def main() -> None:
@@ -31,11 +32,13 @@ def main() -> None:
     if bc.session_file(sid).exists():
         bc.emit()
 
+    base = cwd_base(cwd)
     bc.write_json_atomic(
         bc.REGISTER / f"{sid}.json",
         {
             "session_id": sid,
-            "label": make_label(cwd, sid),
+            "label": f"{base}-{sid[:4]}"[:120],  # for `bridge status` / logs
+            "base": base,                        # topic-name prefix
             "cwd": cwd,
             "source": ev.get("source"),
             "ts": bc.ts(),
