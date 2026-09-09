@@ -74,10 +74,14 @@ def cmd_setup() -> None:
             )
 
     poll = input(f"Poll minutes (Stop hook wait) [{cfg.poll_minutes}]: ").strip()
+    key = input(
+        f"Anthropic API key for topic-title summaries (optional) [{_mask(cfg.anthropic_api_key)}]: "
+    ).strip() or cfg.anthropic_api_key
     cfg.bot_token = token
     cfg.chat_id = chat_id
     if poll:
         cfg.poll_minutes = float(poll)
+    cfg.anthropic_api_key = key
     cfg.save()
     from .config import CONFIG_FILE
 

@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import paths
 from .config import Config
+from .summarize import summarize_title
 from .telegram import Telegram, TelegramError, send_with_retry
 
 log = logging.getLogger("bridge.broker")
@@ -327,6 +328,16 @@ class Broker:
                 self._say(thread_id, "stopped; could not delete this topic — remove it manually.")
             log.info("closed session %s (topic %s, deleted=%s)", rec["label"], thread_id, deleted)
 
+    def _make_title(self, base: str, prompt: str) -> str:
+        summary = None
+        if self.cfg.anthropic_api_key:
+            summary = summarize_title(
+                prompt,
+                api_key=self.cfg.anthropic_api_key,
+                model=self.cfg.title_model,
+            )
+        return _topic_title(base, summary or prompt)
+
     def _reply_general(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
         self.tg.send_message(
@@ -358,7 +369,7 @@ class Broker:
                 role, text = _read_outbox_item(f)
                 # first user prompt -> use it as the topic title
                 if role == "user" and rec and not rec.get("titled") and thread_id:
-                    title = _topic_title(rec.get("base", rec.get("label", "")), text)
+                    title = self._make_title(rec.get("base", rec.get("label", "")), text)
                     if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, title):
                         rec["titled"] = True
                         _write_session(sid, rec)
@@ -428,11 +439,19 @@ def _format_outbox(role: str, text: str) -> str:
     return _ROLE_PREFIX.get(role, "") + (text if text.strip() else "(empty)")
 
 
-def _topic_title(base: str, prompt: str) -> str:
-    """`<cwd>: <first line of the prompt>` trimmed for a forum topic name."""
-    line = " ".join(prompt.split())
-    if len(line) > 90:
-        line = line[:89].rstrip() + "…"
+def _topic_title(base: str, text: str) -> str:
+    """`<cwd>: <short summary>` for a forum topic name.
+
+    `text` is an LLM summary when available, otherwise the raw first prompt —
+    in which case we cut at the first sentence/clause break so it reads like a
+    title rather than a run-on."""
+    line = " ".join(text.split())
+    if len(line) > 64:
+        cut = min(
+            (i for i in (line.find(c, 12) for c in ".?!\n,") if i != -1),
+            default=-1,
+        )
+        line = (line[:cut] if 12 <= cut <= 64 else line[:63].rstrip() + "…")
     title = f"{base}: {line}" if base else line
     return title[:128] or base or "session"
 

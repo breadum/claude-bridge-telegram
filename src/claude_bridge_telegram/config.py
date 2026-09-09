@@ -39,6 +39,10 @@ class Config:
     # (instead of only `grace_seconds`). Turn this on for Telegram-driven
     # sessions; leave it off if you mostly work in the terminal.
     arm_on_start: bool = False
+    # Optional: with an Anthropic API key, the topic title is an LLM summary of
+    # the first prompt instead of a truncation. Falls back silently without a key.
+    anthropic_api_key: str = ""
+    title_model: str = "claude-haiku-4-5-20251001"
 
     @classmethod
     def load(cls) -> Config:
@@ -61,6 +65,10 @@ class Config:
             cfg.delete_topic_on_end = v.lower() in ("1", "true", "yes")
         if v := os.environ.get("CLAUDE_TG_ARM_ON_START"):
             cfg.arm_on_start = v.lower() in ("1", "true", "yes")
+        if v := os.environ.get("ANTHROPIC_API_KEY"):
+            cfg.anthropic_api_key = v
+        if v := os.environ.get("CLAUDE_TG_TITLE_MODEL"):
+            cfg.title_model = v
         return cfg
 
     def save(self) -> None:

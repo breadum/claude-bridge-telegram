@@ -121,9 +121,10 @@ Claude가 아무것도 안 하고 idle이면 `Stop` 훅도 안 돌기 때문에,
 | `/sessions` | 알려진 모든 세션 목록 |
 | `/help` | 이 목록 |
 
-토픽 이름은 **세션의 첫 질문**으로 자동 지정된다 (`<디렉터리>: <질문>`). 그
-전까지는 `<디렉터리> …`. 사용자가 보낸 질문(`🧑`)과 Claude 답변(`🤖`)이 모두
-토픽에 미러링된다.
+토픽 이름은 **세션의 첫 질문**으로 자동 지정된다 (`<디렉터리>: <제목>`). 그
+전까지는 `<디렉터리> …`. `anthropic_api_key`가 설정돼 있으면 제목은 첫 질문의
+LLM 요약이고, 없으면 첫 문장/절을 잘라 쓴다. `/title <text>`로 언제든 덮어쓴다.
+사용자가 보낸 질문(`🧑`)과 Claude 답변(`🤖`)이 모두 토픽에 미러링된다.
 
 ### 세션 종료 / 토픽 정리
 
@@ -190,6 +191,8 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 | `max_reinjections` | 50 | 세션당 연속 주입 안전 상한 |
 | `delete_topic_on_end` | `false` | 세션 종료 시 토픽도 삭제할지. `false`면 토픽은 남고 나중에 `/close`·`bridge prune`으로 정리 |
 | `arm_on_start` | `false` | 세션을 시작부터 armed로. 텔레그램 주도 사용이면 `true` |
+| `anthropic_api_key` | `""` | 있으면 토픽 제목을 첫 질문의 **LLM 요약**으로 (Haiku). 없으면 트렁케이션 폴백 |
+| `title_model` | `claude-haiku-4-5-20251001` | 요약에 쓸 모델 |
 
 각 키는 환경 변수로 덮어쓸 수 있다: `CLAUDE_TG_BOT_TOKEN`,
 `CLAUDE_TG_CHAT_ID`, `CLAUDE_TG_POLL_MINUTES`, `CLAUDE_TG_GRACE_SECONDS`,
