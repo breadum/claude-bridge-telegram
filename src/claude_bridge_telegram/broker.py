@@ -348,14 +348,20 @@ class Broker:
         for f in sorted(paths.END.glob("*.json")):
             sid = f.stem
             rec = _read_session(sid)
-            if rec:
+            tid = rec.get("thread_id") if rec else None
+            if rec and self.cfg.delete_topic_on_end:
+                if tid is not None:
+                    self.tg.delete_forum_topic(self.cfg.chat_id, tid)
+                _forget_session(sid, tid)
+                log.info("session %s ended -> topic %s deleted", sid, tid)
+            elif rec:
                 rec["status"] = "ended"
                 rec["ended"] = _now()
                 _write_session(sid, rec)
-                if rec.get("thread_id"):
-                    self._say(rec["thread_id"], "🔴 session ended.")
+                if tid is not None:
+                    self._say(tid, "🔴 session ended. (/close to delete this topic)")
+                log.info("session %s ended", sid)
             f.unlink(missing_ok=True)
-            log.info("session %s ended", sid)
 
     # --- small helpers ---------------------------------------
 

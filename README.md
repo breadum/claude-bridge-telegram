@@ -44,14 +44,28 @@ topic`. → [문제 해결](#문제-해결) 참고.
 ## 2. 설치
 
 ```bash
+git clone https://github.com/breadum/claude-bridge-telegram ~/claude-bridge-telegram
 cd ~/claude-bridge-telegram
-uv sync                      # 락파일로 .venv 생성
-uv run bridge setup          # 토큰 붙여넣기, 그룹 chat_id 자동 탐지
-uv run bridge start          # 브로커 데몬 실행
-uv run bridge install-hooks  # ~/.claude/settings.json에 훅 추가 (자동 백업)
+uv sync                       # 락파일로 .venv 생성
+
+uv run bridge setup           # 토큰 붙여넣기 → ~/.claude/bridge/config.json 생성 (chmod 600)
+uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (자동 백업)
+./deploy/install-service.sh   # 브로커를 systemd --user 서비스로 상시 실행
 ```
 
+임시로 돌려볼 땐 서비스 대신 `uv run bridge start` / `stop`.
 `bridge`를 PATH에 올리려면: `uv tool install --editable ~/claude-bridge-telegram`.
+
+### 설정(토큰)은 어디에 있나
+
+- **저장소에는 없다.** `bridge setup`이 `~/.claude/bridge/config.json`에 쓴다 —
+  머신마다 로컬, git에 안 올라간다.
+- 브로커(`bridge run`)가 실행될 때마다 `$HOME/.claude/bridge/config.json`을
+  읽는다. systemd 유닛은 토큰을 참조하지 않는다 (그래서 `HOME`이 설정돼 있어야
+  한다 — `systemd --user`가 넣어준다).
+- 훅은 이 파일에서 타이밍 값만 읽고 토큰은 안 쓴다 (텔레그램은 브로커만 호출).
+- 다른 머신 = 위 3줄을 그 머신에서 다시 실행. 코드는 `git pull`, 토큰은 그 머신
+  `config.json`에.
 
 ## 3. 사용
 
@@ -99,8 +113,11 @@ uv run bridge install-hooks  # ~/.claude/settings.json에 훅 추가 (자동 백
 - **끝난 세션 일괄**: `uv run bridge prune` — `status`가 `ended`인 세션의 토픽 +
   상태를 모두 삭제. 브로커가 켜져 있어도 안전하다.
 - **전부**: `uv run bridge prune --all` (확인 프롬프트, `-y`로 건너뛰기).
-- Claude Code 세션을 그냥 끝내면 `SessionEnd` 훅이 상태를 `ended`로 표시하고
-  토픽에 "🔴 session ended."를 남긴다. 토픽 자체는 `prune` 전까지 유지된다.
+- **세션에서 그냥 `/exit`** 하면 `SessionEnd` 훅이 돈다. 기본 동작은:
+  상태를 `ended`로 표시 + 토픽에 "🔴 session ended." → **토픽은 남는다**
+  (`/close`·`bridge prune` 전까지). 스크롤백을 보존하려는 의도.
+- `/exit` 할 때 토픽도 바로 지우고 싶으면 `~/.claude/bridge/config.json`에
+  `"delete_topic_on_end": true` → 브로커 재시작. 그러면 세션 종료 즉시 토픽 삭제.
 
 ## 브로커 관리
 
@@ -151,11 +168,12 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 | `poll_minutes` | 5 | armed 상태 `Stop` 훅 대기 (분) |
 | `grace_seconds` | 5 | un-armed 상태 `Stop` 훅 대기 (초) |
 | `max_reinjections` | 50 | 세션당 연속 주입 안전 상한 |
+| `delete_topic_on_end` | `false` | 세션 종료 시 토픽도 삭제할지. `false`면 토픽은 남고 나중에 `/close`·`bridge prune`으로 정리 |
 
 각 키는 환경 변수로 덮어쓸 수 있다: `CLAUDE_TG_BOT_TOKEN`,
 `CLAUDE_TG_CHAT_ID`, `CLAUDE_TG_POLL_MINUTES`, `CLAUDE_TG_GRACE_SECONDS`,
-`CLAUDE_TG_MAX_REINJECTIONS`. `CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를
-옮긴다 (테스트에서 사용).
+`CLAUDE_TG_MAX_REINJECTIONS`, `CLAUDE_TG_DELETE_TOPIC_ON_END`.
+`CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를 옮긴다 (테스트에서 사용).
 
 > **그룹 이름을 바꿔도 설정은 그대로다.** 브리지는 `chat_id`(숫자)만 쓰고 그룹
 > 제목은 읽지 않는다. 세션별 토픽 이름을 텔레그램에서 바꿔도 무관하다 (라우팅은

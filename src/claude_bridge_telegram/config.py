@@ -30,6 +30,10 @@ class Config:
     grace_seconds: float = 5.0
     # Safety cap on consecutive command injections per session.
     max_reinjections: int = 50
+    # When true, ending a session (SessionEnd / normal /exit) also deletes its
+    # Telegram topic. Default: keep the topic (delete it later with /close or
+    # `bridge prune`).
+    delete_topic_on_end: bool = False
 
     @classmethod
     def load(cls) -> Config:
@@ -48,6 +52,8 @@ class Config:
             cfg.grace_seconds = float(v)
         if v := os.environ.get("CLAUDE_TG_MAX_REINJECTIONS"):
             cfg.max_reinjections = int(v)
+        if v := os.environ.get("CLAUDE_TG_DELETE_TOPIC_ON_END"):
+            cfg.delete_topic_on_end = v.lower() in ("1", "true", "yes")
         return cfg
 
     def save(self) -> None:
