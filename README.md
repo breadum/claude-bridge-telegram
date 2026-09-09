@@ -252,7 +252,7 @@ stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
 |---|---|
 | 코드 | `~/claude-bridge-telegram/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
 | 런타임 상태 | `~/.claude/bridge/` |
-| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`) |
+| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`), `delete_topic_on_end: true` (세션 종료 시 토픽 자동 삭제) |
 | 훅 | `~/.claude/settings.json`에 설치됨 (SessionStart / Stop / SessionEnd). 백업: `~/.claude/settings.json.bak-*` |
 | 브로커 서비스 | `~/.config/systemd/user/claude-bridge-telegram.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
 | 셸 | `~/.zshrc`에 pyenv init 블록 추가됨 |
