@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 # --------------------------------------------------------------------------
-# paths (mirror of claude_tg_bridge.paths, kept standalone on purpose)
+# paths (mirror of claude_bridge_telegram.paths, kept standalone on purpose)
 # --------------------------------------------------------------------------
 
 def root() -> Path:

@@ -1,5 +1,5 @@
 [project]
-name = "claude-tg-bridge"
+name = "claude-bridge-telegram"
 version = "0.1.0"
 description = "Bridge Claude Code sessions to Telegram forum topics: stream responses out, inject commands back in."
 readme = "README.md"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bridge = "claude_tg_bridge.cli:main"
+bridge = "claude_bridge_telegram.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]

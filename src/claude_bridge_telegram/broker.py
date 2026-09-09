@@ -32,7 +32,10 @@ log = logging.getLogger("bridge.broker")
 # getUpdates long-poll seconds. Also the worst-case latency for shipping a
 # response to Telegram, since the loop spends most of its time parked here.
 POLL_TIMEOUT = 10
-SPECIAL = {"/stop", "/pause", "/resume", "/status", "/sessions", "/help", "/arm", "/disarm"}
+SPECIAL = {
+    "/stop", "/pause", "/resume", "/status", "/sessions",
+    "/help", "/arm", "/disarm", "/close",
+}
 
 
 def _now() -> str:
@@ -83,6 +86,26 @@ def _append_inbox(sid: str, item: dict) -> None:
     f = paths.inbox_file(sid)
     with _locked(f), f.open("a") as fh:
         fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def _forget_session(sid: str, thread_id: int | None) -> None:
+    """Wipe all local state for a session. Does NOT delete the Telegram topic."""
+    for p in (
+        paths.session_file(sid),
+        paths.inbox_file(sid),
+        paths.inbox_file(sid).with_name(paths.inbox_file(sid).name + ".lock"),
+        paths.counter_file(sid),
+        paths.REGISTER / f"{sid}.json",
+        paths.END / f"{sid}.json",
+    ):
+        p.unlink(missing_ok=True)
+    if thread_id is not None:
+        paths.thread_file(thread_id).unlink(missing_ok=True)
+    outdir = paths.outbox_dir(sid)
+    if outdir.exists():
+        for f in outdir.iterdir():
+            f.unlink(missing_ok=True)
+        outdir.rmdir()
 
 
 # --------------------------------------------------------------------------
@@ -246,7 +269,8 @@ class Broker:
                 "/disarm   only glance briefly (frees the terminal)\n"
                 "/pause    hold commands until /resume\n"
                 "/resume   deliver held commands\n"
-                "/stop     stop injecting into this session",
+                "/stop     stop injecting into this session\n"
+                "/close    stop, then delete this topic",
             )
         elif head == "/status":
             n = _inbox_len(sid)
@@ -280,6 +304,14 @@ class Broker:
             # tell the hook to stop waiting
             _append_inbox(sid, {"control": "stop", "ts": _now()})
             self._say(thread_id, "🛑 stop signalled — the session will not receive further commands.")
+        elif head == "/close":
+            _append_inbox(sid, {"control": "stop", "ts": _now()})
+            deleted = self.tg.delete_forum_topic(self.cfg.chat_id, thread_id)
+            _forget_session(sid, thread_id)
+            if not deleted:
+                # topic couldn't be deleted (e.g. it's the General topic); say so
+                self._say(thread_id, "stopped; could not delete this topic — remove it manually.")
+            log.info("closed session %s (topic %s, deleted=%s)", rec["label"], thread_id, deleted)
 
     def _reply_general(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]

@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> None:
     p_logs.add_argument("-f", "--follow", action="store_true")
     sub.add_parser("install-hooks", help="add bridge hooks to ~/.claude/settings.json")
     sub.add_parser("uninstall-hooks", help="remove bridge hooks from ~/.claude/settings.json")
+    p_prune = sub.add_parser(
+        "prune", help="delete Telegram topics + local state for ended (or all) sessions"
+    )
+    p_prune.add_argument("--all", action="store_true", help="not just ended ones")
+    p_prune.add_argument("-y", "--yes", action="store_true", help="don't ask")
 
     args = parser.parse_args(argv)
     {
@@ -40,6 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         "logs": lambda: cmd_logs(args.follow),
         "install-hooks": cmd_install_hooks,
         "uninstall-hooks": cmd_uninstall_hooks,
+        "prune": lambda: cmd_prune(all_sessions=args.all, assume_yes=args.yes),
     }[args.cmd]()
 
 
@@ -139,7 +145,7 @@ def cmd_start() -> None:
     paths.ensure_dirs()
     logf = open(paths.LOG_FILE, "a")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "claude_tg_bridge.broker"],
+        [sys.executable, "-m", "claude_bridge_telegram.broker"],
         stdout=logf,
         stderr=logf,
         stdin=subprocess.DEVNULL,
@@ -207,6 +213,44 @@ def cmd_logs(follow: bool) -> None:
         print("no log yet")
         return
     os.execvp("tail", ["tail", "-n", "80"] + (["-f"] if follow else []) + [str(paths.LOG_FILE)])
+
+
+def cmd_prune(*, all_sessions: bool, assume_yes: bool) -> None:
+    """Delete Telegram forum topics and local state for finished sessions.
+
+    Safe to run while the broker is up — it only removes sessions that are
+    already ended (or every session with --all)."""
+    from .broker import _forget_session
+
+    cfg = Config.load()
+    cfg.validate()
+
+    targets: list[dict] = []
+    for f in sorted(paths.SESSIONS.glob("*.json")):
+        try:
+            r = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if all_sessions or r.get("status") == "ended":
+            targets.append(r)
+
+    if not targets:
+        print("nothing to prune" + ("" if all_sessions else " (no ended sessions; use --all)"))
+        return
+
+    print(f"will delete {len(targets)} topic(s) + local state:")
+    for r in targets:
+        print(f"  {r['label']:<24} {r.get('status', '?'):<8} thread={r.get('thread_id')}")
+    if not assume_yes and input("proceed? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("aborted")
+        return
+
+    with Telegram(cfg.bot_token) as tg:
+        for r in targets:
+            tid = r.get("thread_id")
+            ok = tg.delete_forum_topic(cfg.chat_id, tid) if tid else False
+            _forget_session(r["session_id"], tid)
+            print(f"  {r['label']}: topic {'deleted' if ok else 'not deleted (gone/no rights)'}, state cleared")
 
 
 # --------------------------------------------------------------------------

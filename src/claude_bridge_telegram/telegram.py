@@ -93,6 +93,19 @@ class Telegram:
         except TelegramError:
             pass
 
+    def delete_forum_topic(self, chat_id: int, message_thread_id: int) -> bool:
+        """Delete a topic and all its messages. Returns False if it was already
+        gone or we lack rights."""
+        try:
+            self._call(
+                "deleteForumTopic",
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+            )
+            return True
+        except TelegramError:
+            return False
+
 
 def _split(text: str, limit: int) -> list[str]:
     text = text if text.strip() else "(empty response)"

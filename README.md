@@ -1,4 +1,4 @@
-# claude-tg-bridge
+# claude-bridge-telegram
 
 Claude Code 세션을 텔레그램에서 조종하는 브리지. 세션마다 텔레그램 그룹 안에
 **포럼 토픽**이 하나씩 생기고 — 세션의 응답은 그 토픽으로 흘러나오고, 토픽에
@@ -44,14 +44,14 @@ topic`. → [문제 해결](#문제-해결) 참고.
 ## 2. 설치
 
 ```bash
-cd ~/claude-tg-bridge
+cd ~/claude-bridge-telegram
 uv sync                      # 락파일로 .venv 생성
 uv run bridge setup          # 토큰 붙여넣기, 그룹 chat_id 자동 탐지
 uv run bridge start          # 브로커 데몬 실행
 uv run bridge install-hooks  # ~/.claude/settings.json에 훅 추가 (자동 백업)
 ```
 
-`bridge`를 PATH에 올리려면: `uv tool install --editable ~/claude-tg-bridge`.
+`bridge`를 PATH에 올리려면: `uv tool install --editable ~/claude-bridge-telegram`.
 
 ## 3. 사용
 
@@ -86,53 +86,55 @@ uv run bridge install-hooks  # ~/.claude/settings.json에 훅 추가 (자동 백
 | `/status` | 라벨, armed/paused 상태, 대기 중인 명령 수 |
 | `/arm` / `/disarm` | 긴 대기 창 켜기 / 끄기 |
 | `/pause` / `/resume` | 명령 보류 / 재개 |
-| `/stop` | 이 세션에 대한 명령 주입 중단 |
+| `/stop` | 이 세션에 대한 명령 주입 중단 (토픽은 남김) |
+| `/close` | `/stop` 한 뒤 **이 토픽을 삭제**하고 세션 상태 정리 |
 | `/sessions` | 알려진 모든 세션 목록 |
 | `/help` | 이 목록 |
+
+### 세션 종료 / 토픽 정리
+
+- **한 세션만**: 그 토픽에서 `/close` — 토픽이 삭제되고 로컬 상태(`sessions/`,
+  `threads/`, `inbox/` 등)도 지워진다. (텔레그램에서 토픽을 길게 눌러 직접
+  삭제해도 됨 — 다음 `bridge prune`이 남은 상태를 청소한다.)
+- **끝난 세션 일괄**: `uv run bridge prune` — `status`가 `ended`인 세션의 토픽 +
+  상태를 모두 삭제. 브로커가 켜져 있어도 안전하다.
+- **전부**: `uv run bridge prune --all` (확인 프롬프트, `-y`로 건너뛰기).
+- Claude Code 세션을 그냥 끝내면 `SessionEnd` 훅이 상태를 `ended`로 표시하고
+  토픽에 "🔴 session ended."를 남긴다. 토픽 자체는 `prune` 전까지 유지된다.
 
 ## 브로커 관리
 
 ```bash
-uv run bridge status      # 브로커 + 세션별 상태
-uv run bridge logs -f     # ~/.claude/bridge/state/broker.log tail
+uv run bridge status         # 브로커 + 세션별 상태
+uv run bridge logs -f        # ~/.claude/bridge/state/broker.log tail
 uv run bridge restart
 uv run bridge stop
+uv run bridge prune          # 끝난 세션 토픽 + 상태 삭제 (--all / -y)
 uv run bridge uninstall-hooks
 ```
 
 ### 브로커를 항상 켜두기 (systemd --user)
 
-```ini
-# ~/.config/systemd/user/claude-tg-bridge.service
-[Unit]
-Description=claude-tg-bridge broker (Claude Code <-> Telegram)
-After=network-online.target
-Wants=network-online.target
+유닛 파일과 설치 스크립트는 저장소의 [`deploy/`](deploy/)에 있다:
 
-[Service]
-Type=simple
-ExecStart=%h/claude-tg-bridge/.venv/bin/bridge run
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=default.target
+```
+deploy/
+  claude-bridge-telegram.service   # systemd --user 유닛 (%h = 홈, 레포는 ~/claude-bridge-telegram 가정)
+  install-service.sh               # 유닛 복사 → daemon-reload → enable --now → enable-linger
+  uninstall-service.sh             # disable --now → 유닛 삭제 (훅/상태는 안 건드림)
 ```
 
 ```bash
-systemctl --user daemon-reload
-systemctl --user enable --now claude-tg-bridge.service
-loginctl enable-linger "$USER"     # 로그인 없이 / 재부팅 후에도 계속 실행
+uv sync                           # .venv 먼저
+./deploy/install-service.sh       # 멱등 — 유닛 수정/레포 이동 후 다시 실행
 ```
 
 관리:
 
 ```bash
-systemctl --user status  claude-tg-bridge.service
-systemctl --user restart claude-tg-bridge.service   # 코드 수정 후
-journalctl --user -u claude-tg-bridge.service -f    # 또는: bridge logs -f
+systemctl --user status  claude-bridge-telegram.service
+systemctl --user restart claude-bridge-telegram.service   # 코드 수정 후
+journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs -f
 ```
 
 서비스로 돌리는 동안엔 `bridge start/stop` 대신 `systemctl --user`로 제어한다
@@ -163,8 +165,8 @@ journalctl --user -u claude-tg-bridge.service -f    # 또는: bridge logs -f
 ## 디렉터리 구조
 
 ```
-~/claude-tg-bridge/            # 코드
-  src/claude_tg_bridge/        # broker, cli, telegram client, config
+~/claude-bridge-telegram/            # 코드
+  src/claude_bridge_telegram/        # broker, cli, telegram client, config
   hooks/                       # session_start.py, stop.py, session_end.py (stdlib 전용)
 
 ~/.claude/bridge/              # 런타임 상태 (브로커 + 훅 공유)
@@ -196,7 +198,7 @@ journalctl --user -u claude-tg-bridge.service -f    # 또는: bridge logs -f
 봇이 관리자지만 *주제 관리(Manage Topics)* 권한이 없다. 그룹 → 관리자 → 봇 →
 **주제 관리** 켜기 → 저장. 확인:
 ```bash
-uv run python -c "import httpx;from claude_tg_bridge.config import Config as C;c=C.load();b=f'https://api.telegram.org/bot{c.bot_token}';me=httpx.get(f'{b}/getMe').json()['result']['id'];print(httpx.get(f'{b}/getChatMember',params={'chat_id':c.chat_id,'user_id':me}).json()['result'].get('can_manage_topics'))"
+uv run python -c "import httpx;from claude_bridge_telegram.config import Config as C;c=C.load();b=f'https://api.telegram.org/bot{c.bot_token}';me=httpx.get(f'{b}/getMe').json()['result']['id'];print(httpx.get(f'{b}/getChatMember',params={'chat_id':c.chat_id,'user_id':me}).json()['result'].get('can_manage_topics'))"
 ```
 
 **봇이 메시지를 못 받음 (`setup` 중 `0 update(s)`)**
@@ -216,12 +218,12 @@ privacy mode + 아직 관리자 아님, 또는 봇 합류 이전 메시지다. �
 
 **브로커가 안 뜸: `broker already running`**
 stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
-`systemctl --user status claude-tg-bridge`, 아니면
+`systemctl --user status claude-bridge-telegram`, 아니면
 `cat ~/.claude/bridge/state/broker.pid`. 아무것도 안 돌고 있으면
 `rm ~/.claude/bridge/state/broker.pid`.
 
 **브로커 코드를 수정한 뒤**
-`systemctl --user restart claude-tg-bridge.service` (직접 실행 중이면
+`systemctl --user restart claude-bridge-telegram.service` (직접 실행 중이면
 `bridge restart`). 훅 스크립트는 매 호출마다 다시 읽으므로 재시작 불필요.
 
 ## 이 머신 (`host`) — 현재 설정
@@ -230,27 +232,27 @@ stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
 
 | 항목 | 위치 |
 |---|---|
-| 코드 | `~/claude-tg-bridge/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
+| 코드 | `~/claude-bridge-telegram/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
 | 런타임 상태 | `~/.claude/bridge/` |
 | 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`) |
 | 훅 | `~/.claude/settings.json`에 설치됨 (SessionStart / Stop / SessionEnd). 백업: `~/.claude/settings.json.bak-*` |
-| 브로커 서비스 | `~/.config/systemd/user/claude-tg-bridge.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
+| 브로커 서비스 | `~/.config/systemd/user/claude-bridge-telegram.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
 | 셸 | `~/.zshrc`에 pyenv init 블록 추가됨 |
 
 일상 관리:
 
 ```bash
-systemctl --user status claude-tg-bridge.service        # 살아있나?
-journalctl --user -u claude-tg-bridge.service -f        # 실시간 로그
-systemctl --user restart claude-tg-bridge.service       # 코드 변경 반영
-~/claude-tg-bridge/.venv/bin/bridge status              # 브로커 + 세션별 뷰
+systemctl --user status claude-bridge-telegram.service        # 살아있나?
+journalctl --user -u claude-bridge-telegram.service -f        # 실시간 로그
+systemctl --user restart claude-bridge-telegram.service       # 코드 변경 반영
+~/claude-bridge-telegram/.venv/bin/bridge status              # 브로커 + 세션별 뷰
 ```
 
 봇 토큰 교체: `~/.claude/bridge/config.json` 수정 후 서비스 재시작. 전체 제거:
 
 ```bash
-systemctl --user disable --now claude-tg-bridge.service
-rm ~/.config/systemd/user/claude-tg-bridge.service
-~/claude-tg-bridge/.venv/bin/bridge uninstall-hooks     # settings.json 복원 (백업됨)
+systemctl --user disable --now claude-bridge-telegram.service
+rm ~/.config/systemd/user/claude-bridge-telegram.service
+~/claude-bridge-telegram/.venv/bin/bridge uninstall-hooks     # settings.json 복원 (백업됨)
 # 선택: loginctl disable-linger "$USER"; rm -rf ~/.claude/bridge
 ```
