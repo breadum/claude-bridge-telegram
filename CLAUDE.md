@@ -69,6 +69,12 @@ daemon plus five Claude Code hooks talking through files.
    (called in `_process_outbox` for `role == "user"`) rewrites the ones worth
    showing into a one-line `event` (🔔) and returns `None` for pure noise, which
    the broker then drops. Add a pattern there, not in the hook.
+   - **The one exception is the Telegram echo:** a message the user sent from the
+     topic fires `UserPromptSubmit` too (Claude Code delivered the broker's
+     injection, wrapped in an "Another Claude session sent a message:" preamble).
+     `user_prompt_submit.py` drops it *before* queuing (still marks the turn
+     busy); `tidy_prompt` has the same prefix check as a backstop. Without this
+     every Telegram message double-posts in its topic.
 
 ## Secrets
 

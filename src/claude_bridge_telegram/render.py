@@ -202,6 +202,13 @@ _STRIP_BLOCKS = re.compile(
 # slash commands that are pure local UI — not worth a line in the topic
 _SKIP_COMMANDS = {"usage", "cost", "help", "clear", "config", "status"}
 
+# A message the user sent from Telegram comes back through UserPromptSubmit wrapped
+# in this preamble. user_prompt_submit.py already drops it; this is the backstop.
+_PEER_ECHO_PREFIXES = (
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+)
+
 
 def _inner(s: str, tag: str) -> str:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", s, re.DOTALL)
@@ -213,6 +220,9 @@ def tidy_prompt(text: str) -> tuple[str, str] | None:
     skip it. `role` is "user" for real input, "event" for machine-generated
     turns (rendered with a 🔔 prefix)."""
     s = text.strip()
+
+    if s.startswith(_PEER_ECHO_PREFIXES):
+        return None
 
     m = _TASK_NOTIF.match(s)
     if m:

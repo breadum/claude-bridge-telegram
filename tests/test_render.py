@@ -163,6 +163,11 @@ def test_tidy_skips_pure_ui_commands():
     assert tidy_prompt("<command-name>usage</command-name><command-args></command-args>") is None
 
 
+def test_tidy_skips_peer_injection_echo():
+    wrapped = "Another Claude session sent a message:\n빌드 돌려\n\nThis came from another Claude session..."
+    assert tidy_prompt(wrapped) is None
+
+
 def test_tidy_skips_lone_context_block():
     assert tidy_prompt("<system-reminder>be nice</system-reminder>") is None
     assert tidy_prompt("<local-command-stdout></local-command-stdout>") is None

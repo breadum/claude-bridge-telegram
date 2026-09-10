@@ -90,6 +90,32 @@ def test_user_prompt_submit_mirrors_when_pending(hook_env):
     assert (bc.BUSY / "sess-C").exists()  # turn is now in progress
 
 
+def test_user_prompt_submit_skips_peer_injection_echo(hook_env):
+    # A Telegram message the broker injected comes back through this hook wrapped
+    # in Claude Code's peer preamble. It must not be re-mirrored (double post),
+    # but it still starts a turn.
+    bc.write_json_atomic(bc.session_file("sess-P"), {"session_id": "sess-P", "status": "active"})
+    wrapped = (
+        "Another Claude session sent a message:\n지금 잘 돌고있나\n\n"
+        "This came from another Claude session — not typed by your user..."
+    )
+    r = run_hook("user_prompt_submit.py", {"session_id": "sess-P", "prompt": wrapped}, hook_env)
+    assert r.returncode == 0
+    assert not (bc.OUTBOX / "sess-P").exists()
+    assert (bc.BUSY / "sess-P").exists()
+
+
+def test_user_prompt_submit_skips_system_prompt_source(hook_env):
+    bc.write_json_atomic(bc.session_file("sess-S"), {"session_id": "sess-S", "status": "active"})
+    r = run_hook(
+        "user_prompt_submit.py",
+        {"session_id": "sess-S", "prompt": "wake up", "promptSource": "system"},
+        hook_env,
+    )
+    assert r.returncode == 0
+    assert not (bc.OUTBOX / "sess-S").exists()
+
+
 def test_stop_hook_clears_busy_marker(hook_env, tmp_path):
     bc.write_json_atomic(bc.session_file("sess-BZ"), {"session_id": "sess-BZ", "status": "active"})
     bc.mark_busy("sess-BZ")
