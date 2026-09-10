@@ -75,12 +75,32 @@ def test_blockquote():
     assert to_telegram_html("> quoted") == "<blockquote>quoted</blockquote>"
 
 
-def test_table_becomes_pre_block():
+def test_table_becomes_aligned_pre_block():
     md = "| a | b |\n|---|---|\n| 1 | 2 |"
     out = to_telegram_html(md)
-    assert out.startswith("<pre>") and out.endswith("</pre>")
-    assert "| a | b |" in out
-    assert "|---|" in out
+    assert out == "<pre>a  b\n-  -\n1  2</pre>"
+
+
+def test_table_columns_align_on_display_width():
+    md = (
+        "| 이름 | qty |\n"
+        "|---|---:|\n"
+        "| alpha | 3 |\n"
+        "| 긴 이름 | 1200 |\n"
+    )
+    out = to_telegram_html(md)
+    body = out.removeprefix("<pre>").removesuffix("</pre>").split("\n")
+    # every rendered row is the same display width (columns line up)
+    from claude_bridge_telegram.render import _disp_width
+
+    assert len({_disp_width(line) for line in body}) == 1
+    assert "1200" in out and "  3" in out  # right-aligned numeric column
+
+
+def test_ragged_table_falls_back_to_raw_pre():
+    md = "| a | b | c |\n|---|---|\n| 1 | 2 | 3 |"  # header 3 cols, separator 2
+    out = to_telegram_html(md)
+    assert out.startswith("<pre>") and "| a | b | c |" in out
 
 
 def test_collapses_blank_lines():

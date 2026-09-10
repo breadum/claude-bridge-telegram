@@ -1,9 +1,11 @@
 """Render Claude's Markdown-ish output into the small HTML subset Telegram accepts.
 
 Telegram `parse_mode="HTML"` supports only: ``<b> <i> <u> <s> <a href> <code>
-<pre> <blockquote>``. Constructs we can't map (tables, headings, nested lists)
-degrade to readable plain text instead of leaking raw Markdown punctuation. Only
-``< > &`` are escaped in body text.
+<pre> <blockquote>``. Constructs we can't map degrade to readable plain text
+instead of leaking Markdown punctuation: headings become bold lines, GFM tables
+become a space-aligned monospace grid inside ``<pre>`` (column widths measured in
+display cells, so CJK lines up), nested lists keep their indent. Only ``< > &``
+are escaped in body text.
 
 The caller sends the result with ``parse_mode="HTML"`` and, if Telegram still
 rejects the markup, retries the same chunk tag-stripped via `strip_tags` — so a
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 
 _FENCE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
@@ -114,11 +117,63 @@ def _tables_to_pre(md: str, keep) -> str:
             while i < len(lines) and _TABLE_LINE.match(lines[i]):
                 block.append(lines[i])
                 i += 1
-            out.append(keep("<pre>" + html.escape("\n".join(block), quote=False) + "</pre>"))
+            grid = _align_table(block) or "\n".join(block)
+            out.append(keep("<pre>" + html.escape(grid, quote=False) + "</pre>"))
             continue
         out.append(lines[i])
         i += 1
     return "\n".join(out)
+
+
+_SEP_CELL = re.compile(r"^:?-+:?$")
+
+
+def _disp_width(s: str) -> int:
+    """Column width of a string in a monospace block: CJK / fullwidth glyphs
+    take two cells, everything else one."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+def _align_table(block: list[str]) -> str | None:
+    """Reformat a GFM table into a space-aligned monospace grid so it lines up
+    in Telegram's <pre> font. Returns None if the block doesn't parse cleanly."""
+    rows = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in block]
+    if len(rows) < 2:
+        return None
+    ncol = len(rows[0])
+    seps = rows[1]
+    if len(seps) != ncol or not all(_SEP_CELL.match(s or "-") for s in seps):
+        return None
+
+    aligns = [
+        "center" if s.startswith(":") and s.endswith(":")
+        else "right" if s.endswith(":")
+        else "left"
+        for s in seps
+    ]
+
+    def fit(r: list[str]) -> list[str]:
+        return (r + [""] * ncol)[:ncol]
+
+    header, body = fit(rows[0]), [fit(r) for r in rows[2:]]
+    width = [max(_disp_width(r[i]) for r in (header, *body)) for i in range(ncol)]
+
+    def cell(text: str, i: int) -> str:
+        gap = width[i] - _disp_width(text)
+        if gap <= 0:
+            return text
+        if aligns[i] == "right":
+            return " " * gap + text
+        if aligns[i] == "center":
+            return " " * (gap // 2) + text + " " * (gap - gap // 2)
+        return text + " " * gap
+
+    def line(r: list[str]) -> str:
+        return "  ".join(cell(c, i) for i, c in enumerate(r)).rstrip()
+
+    return "\n".join(
+        [line(header), "  ".join("-" * w for w in width), *(line(r) for r in body)]
+    )
 
 
 def strip_tags(s: str) -> str:
