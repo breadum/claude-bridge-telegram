@@ -45,7 +45,7 @@
 
 ## 설치
 
-### 텔레그램 (처음 한 번)
+### 1. 텔레그램 봇과 그룹 (처음 한 번)
 
 1. [@BotFather](https://t.me/BotFather)에서 `/newbot`으로 봇을 만들고 토큰을 받는다.
 2. 슈퍼그룹을 만들고 그룹 편집에서 Topics를 켠다.
@@ -54,30 +54,38 @@
 4. 봇이 관리자가 된 다음 그룹에 아무 메시지나 하나 보낸다. 그 전 메시지는 봇이
    못 본다.
 
-### 브리지
+### 2. 브리지 설치
+
+저장소를 받아 의존성을 깐다.
 
 ```bash
 git clone <이 저장소>
 cd claude-bridge-telegram
 uv sync
-
-uv run bridge setup           # 봇 토큰 입력. ~/.claude/bridge/config.json 생성
-uv run bridge install-hooks   # ~/.claude/settings.json에 훅 등록. 기존 파일은 백업됨
-./service/install.sh          # 브로커를 systemd --user 서비스로 등록
 ```
 
-마지막으로 `~/.claude/settings.json`에 한 줄 넣는다. 이게 없으면 텔레그램에서 보낸
-메시지가 세션까지 가지 못한다. 이유는 [권한](#권한)에 있다.
+그다음 세 가지를 등록한다.
+
+```bash
+uv run bridge setup           # 봇 토큰을 물어보고 ~/.claude/bridge/config.json에 저장한다
+uv run bridge install-hooks   # Claude Code 훅을 ~/.claude/settings.json에 추가한다 (원본은 자동 백업)
+./service/install.sh          # 브로커를 systemd --user 서비스로 올려 상시 실행한다
+```
+
+마지막으로 `~/.claude/settings.json`에 한 줄을 더한다. 이 설정이 없으면 브로커가
+넣은 메시지를 Claude Code가 보류하고 세션까지 전달하지 않는다. 배경은
+[권한](#권한)에 있다.
 
 ```json
 "crossSessionInbound": "accept"
 ```
 
-서비스 없이 잠깐만 써 볼 거면 `uv run bridge start` / `stop`으로 돌려도 된다.
-레포를 옮겼다면 옛 위치에서 `bridge uninstall-hooks`를 하고 새 위치에서
-`uv sync && uv run bridge install-hooks && ./service/install.sh`를 다시 실행한다.
+> 서비스로 올리지 않고 잠깐만 써 볼 때는 `uv run bridge start` / `stop`을 쓴다.
+> 저장소를 다른 경로로 옮겼다면 옛 위치에서 `bridge uninstall-hooks`를 한 뒤,
+> 새 위치에서 `uv sync && uv run bridge install-hooks && ./service/install.sh`를
+> 다시 실행한다.
 
-### 세션 시작
+### 3. 첫 세션
 
 ```bash
 claude --dangerously-skip-permissions
