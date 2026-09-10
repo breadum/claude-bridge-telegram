@@ -124,3 +124,62 @@ def _tables_to_pre(md: str, keep) -> str:
 def strip_tags(s: str) -> str:
     """HTML -> plain text, for the caller's fallback send."""
     return html.unescape(re.sub(r"<[^>]+>", "", s))
+
+
+# --------------------------------------------------------------------------
+# synthetic UserPromptSubmit payloads
+#
+# Claude Code fires UserPromptSubmit not just for what the user typed but also
+# for machine-generated turns: a finished background task, a locally-run slash
+# command, injected context blocks. Mirrored verbatim these are XML noise, so
+# `tidy_prompt` rewrites the ones we recognise and drops the ones that carry
+# nothing worth showing.
+# --------------------------------------------------------------------------
+
+_TASK_NOTIF = re.compile(r"^\s*<task-notification>(.*)</task-notification>\s*$", re.DOTALL)
+_BG_CMD = re.compile(r'^Background command "(.+?)" (.+)$', re.DOTALL)
+_CMD_WRAPPER = re.compile(r"^\s*<command-(name|message|args)>", re.DOTALL)
+_STRIP_BLOCKS = re.compile(
+    r"<(system-reminder|local-command-stdout|command-message|command-args)>.*?</\1>"
+    r"|</?command-name>",
+    re.DOTALL,
+)
+# slash commands that are pure local UI — not worth a line in the topic
+_SKIP_COMMANDS = {"usage", "cost", "help", "clear", "config", "status"}
+
+
+def _inner(s: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>(.*?)</{tag}>", s, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def tidy_prompt(text: str) -> tuple[str, str] | None:
+    """Map a UserPromptSubmit payload to (role, text) for mirroring, or None to
+    skip it. `role` is "user" for real input, "event" for machine-generated
+    turns (rendered with a 🔔 prefix)."""
+    s = text.strip()
+
+    m = _TASK_NOTIF.match(s)
+    if m:
+        body = m.group(1)
+        summary = _inner(body, "summary") or "background task finished"
+        status = _inner(body, "status")
+        bg = _BG_CMD.match(summary)
+        line = f"{bg.group(1)} — {bg.group(2)}" if bg else summary
+        if status and status not in line:
+            line = f"{line} [{status}]"
+        return ("event", line)
+
+    if _CMD_WRAPPER.match(s):
+        name = _inner(s, "command-name")
+        if not name or name in _SKIP_COMMANDS:
+            return None
+        args = _inner(s, "command-args")
+        return ("event", f"/{name} {args}".rstrip())
+
+    stripped = _STRIP_BLOCKS.sub("", s).strip()
+    if not stripped:
+        return None
+    if stripped != s:
+        return ("user", stripped)
+    return ("user", text)

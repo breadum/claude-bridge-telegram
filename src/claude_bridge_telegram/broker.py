@@ -29,7 +29,7 @@ from pathlib import Path
 from . import paths
 from .config import Config
 from .inject import InjectError, inject_user_message
-from .render import to_telegram_html
+from .render import tidy_prompt, to_telegram_html
 from .telegram import Telegram, TelegramError, send_with_retry
 
 log = logging.getLogger("bridge.broker")
@@ -405,6 +405,12 @@ class Broker:
             thread_id = rec["thread_id"]
             for f in sorted([*sdir.glob("*.json"), *sdir.glob("*.txt")]):
                 role, text, ai_title = _read_outbox_item(f)
+                if role == "user":
+                    tidied = tidy_prompt(text)
+                    if tidied is None:
+                        f.unlink(missing_ok=True)
+                        continue
+                    role, text = tidied
                 if ai_title and not rec.get("titled") and thread_id:
                     name = ai_title[:128]
                     if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, name):
@@ -451,7 +457,7 @@ class Broker:
         send_with_retry(self.tg, self.cfg.chat_id, text, message_thread_id=thread_id)
 
 
-_ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ "}
+_ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ ", "event": "🔔 "}
 # _format_outbox output is sent with parse_mode="HTML" (see _process_outbox).
 
 

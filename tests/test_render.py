@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from claude_bridge_telegram.render import strip_tags, to_telegram_html
+from claude_bridge_telegram.render import strip_tags, tidy_prompt, to_telegram_html
 
 
 def test_empty():
@@ -110,3 +110,45 @@ def test_strip_tags_roundtrips_to_plain():
     plain = strip_tags(html)
     assert "<" not in plain.replace("<x>", "")  # only the escaped-then-stripped literal
     assert "bold" in plain and "Hi" in plain
+
+
+# --- tidy_prompt -------------------------------------------------------------
+
+def test_tidy_plain_prompt_passes_through():
+    assert tidy_prompt("복구 진행해") == ("user", "복구 진행해")
+
+
+def test_tidy_task_notification_to_one_liner():
+    payload = (
+        "<task-notification>\n"
+        "<task-id>bp6unl86s</task-id>\n"
+        "<tool-use-id>toolu_01WoVA</tool-use-id>\n"
+        "<output-file>/tmp/x/bp6unl86s.output</output-file>\n"
+        "<status>completed</status>\n"
+        '<summary>Background command "Test restore of competition" completed (exit code 0)</summary>\n'
+        "</task-notification>"
+    )
+    role, text = tidy_prompt(payload)
+    assert role == "event"
+    assert text == "Test restore of competition — completed (exit code 0)"
+    assert "<task-id>" not in text and "output-file" not in text
+
+
+def test_tidy_slash_command():
+    p = "<command-name>diff</command-name><command-message>diff</command-message><command-args>HEAD~1</command-args>"
+    assert tidy_prompt(p) == ("event", "/diff HEAD~1")
+
+
+def test_tidy_skips_pure_ui_commands():
+    assert tidy_prompt("<command-name>usage</command-name><command-args></command-args>") is None
+
+
+def test_tidy_skips_lone_context_block():
+    assert tidy_prompt("<system-reminder>be nice</system-reminder>") is None
+    assert tidy_prompt("<local-command-stdout></local-command-stdout>") is None
+
+
+def test_tidy_keeps_real_text_around_a_context_block():
+    role, text = tidy_prompt("<system-reminder>ctx</system-reminder>\n\nfix the bug")
+    assert role == "user"
+    assert text == "fix the bug"

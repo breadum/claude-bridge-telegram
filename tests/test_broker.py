@@ -173,3 +173,27 @@ def test_outbox_renders_markdown_as_html(monkeypatch):
     assert "<code>code</code>" in text
     assert "&lt;raw&gt;" in text and "<raw>" not in text
     assert "##" not in text and "**" not in text
+
+
+def test_outbox_tidies_task_notification(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+    fake.sent.clear()
+
+    d = paths.outbox_dir("s1")
+    d.mkdir(parents=True, exist_ok=True)
+    payload = (
+        "<task-notification><status>completed</status>"
+        '<summary>Background command "probe the fix" completed (exit code 0)</summary>'
+        "</task-notification>"
+    )
+    (d / "001.json").write_text(json.dumps({"role": "user", "text": payload}))
+    (d / "002.json").write_text(json.dumps(
+        {"role": "user", "text": "<local-command-stdout></local-command-stdout>"}
+    ))
+    b._process_outbox()
+
+    texts = [t for _, t, *_ in fake.sent]
+    assert texts == ["🔔 probe the fix — completed (exit code 0)"]
+    assert list(d.iterdir()) == []  # both consumed, the noise one silently

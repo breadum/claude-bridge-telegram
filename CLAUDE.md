@@ -59,6 +59,12 @@ daemon plus four Claude Code hooks talking through files.
    never drops it. The bridge's *own* messages (`_say`, topic header) stay plain
    — don't pass `parse_mode` for those unless you also escape them.
 
+6. **`UserPromptSubmit` also fires for machine turns** — a finished background
+   task, a locally-run slash command, injected context blocks. `render.tidy_prompt`
+   (called in `_process_outbox` for `role == "user"`) rewrites the ones worth
+   showing into a one-line `event` (🔔) and returns `None` for pure noise, which
+   the broker then drops. Add a pattern there, not in the hook.
+
 ## Secrets
 
 - The Telegram bot token lives **only** in `~/.claude/bridge/config.json`
