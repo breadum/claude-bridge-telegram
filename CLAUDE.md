@@ -52,6 +52,13 @@ daemon plus four Claude Code hooks talking through files.
    Change the `outbox` JSON shape and you must change both the hook that writes
    it (`_bridge_common.queue_outbox`) and `broker._read_outbox_item`.
 
+5. **Mirrored message bodies go out as Telegram HTML.** `render.to_telegram_html`
+   maps Claude's Markdown onto Telegram's tag subset; `_process_outbox` sends it
+   with `parse_mode="HTML"`. `telegram.send_message` retries a chunk tag-stripped
+   if Telegram rejects the markup, so a converter bug un-styles a message but
+   never drops it. The bridge's *own* messages (`_say`, topic header) stay plain
+   — don't pass `parse_mode` for those unless you also escape them.
+
 ## Secrets
 
 - The Telegram bot token lives **only** in `~/.claude/bridge/config.json`

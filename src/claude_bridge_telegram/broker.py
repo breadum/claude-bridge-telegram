@@ -29,6 +29,7 @@ from pathlib import Path
 from . import paths
 from .config import Config
 from .inject import InjectError, inject_user_message
+from .render import to_telegram_html
 from .telegram import Telegram, TelegramError, send_with_retry
 
 log = logging.getLogger("bridge.broker")
@@ -415,6 +416,7 @@ class Broker:
                     self.cfg.chat_id,
                     _format_outbox(role, text),
                     message_thread_id=thread_id,
+                    parse_mode="HTML",
                 )
                 if ok:
                     f.unlink(missing_ok=True)
@@ -450,6 +452,7 @@ class Broker:
 
 
 _ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ "}
+# _format_outbox output is sent with parse_mode="HTML" (see _process_outbox).
 
 
 def _read_outbox_item(path: Path) -> tuple[str, str, str]:
@@ -472,7 +475,8 @@ def _read_outbox_item(path: Path) -> tuple[str, str, str]:
 
 
 def _format_outbox(role: str, text: str) -> str:
-    return _ROLE_PREFIX.get(role, "") + (text if text.strip() else "(empty)")
+    """Role emoji + the message body rendered as Telegram HTML."""
+    return _ROLE_PREFIX.get(role, "") + to_telegram_html(text)
 
 
 def _sessions_summary() -> str:

@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from .render import strip_tags
+
 API_BASE = "https://api.telegram.org"
 MESSAGE_LIMIT = 4096
 
@@ -67,15 +69,31 @@ class Telegram:
         text: str,
         *,
         message_thread_id: int | None = None,
+        parse_mode: str | None = None,
     ) -> None:
         for chunk in _split(text, MESSAGE_LIMIT):
-            self._call(
-                "sendMessage",
-                chat_id=chat_id,
-                message_thread_id=message_thread_id,
-                text=chunk,
-                disable_web_page_preview=True,
-            )
+            try:
+                self._call(
+                    "sendMessage",
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    text=chunk,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=True,
+                )
+            except TelegramError as e:
+                # A chunk that split mid-tag (or a converter bug) makes Telegram
+                # reject the markup — resend it flat so nothing is lost.
+                if parse_mode and _is_markup_error(e):
+                    self._call(
+                        "sendMessage",
+                        chat_id=chat_id,
+                        message_thread_id=message_thread_id,
+                        text=strip_tags(chunk),
+                        disable_web_page_preview=True,
+                    )
+                else:
+                    raise
 
     # --- forum topics --------------------------------------------------
 
@@ -120,6 +138,11 @@ class Telegram:
             return False
 
 
+def _is_markup_error(e: TelegramError) -> bool:
+    m = str(e).lower()
+    return "parse" in m or "entities" in m or "tag" in m or "entity" in m
+
+
 def _split(text: str, limit: int) -> list[str]:
     text = text if text.strip() else "(empty response)"
     if len(text) <= limit:
@@ -143,13 +166,16 @@ def send_with_retry(
     text: str,
     *,
     message_thread_id: int | None = None,
+    parse_mode: str | None = None,
     attempts: int = 4,
 ) -> bool:
     """Best-effort send; returns True on success. Used by the broker so a
     transient failure doesn't drop an outbox file."""
     for i in range(attempts):
         try:
-            tg.send_message(chat_id, text, message_thread_id=message_thread_id)
+            tg.send_message(
+                chat_id, text, message_thread_id=message_thread_id, parse_mode=parse_mode
+            )
             return True
         except TelegramError:
             if i == attempts - 1:

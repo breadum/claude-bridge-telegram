@@ -5,7 +5,7 @@ from __future__ import annotations
 
 class FakeTelegram:
     def __init__(self, *args, **kwargs) -> None:
-        self.sent: list[tuple[int, str, int | None]] = []
+        self.sent: list[tuple[int, str, int | None, str | None]] = []
         self.created: list[tuple[int, str]] = []
         self.edited: list[tuple[int, int, str]] = []
         self.deleted: list[tuple[int, int]] = []
@@ -13,8 +13,14 @@ class FakeTelegram:
         self.updates: list[dict] = []
 
     # --- outbound ---
-    def send_message(self, chat_id: int, text: str, message_thread_id: int | None = None):
-        self.sent.append((chat_id, text, message_thread_id))
+    def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        message_thread_id: int | None = None,
+        parse_mode: str | None = None,
+    ):
+        self.sent.append((chat_id, text, message_thread_id, parse_mode))
         return {"message_id": len(self.sent)}
 
     def create_forum_topic(self, chat_id: int, name: str) -> int:
@@ -57,8 +63,8 @@ def install(monkeypatch, cfg_token: str = "tok", chat_id: int = -1001):
     fake = FakeTelegram()
     monkeypatch.setattr(broker, "Telegram", lambda *a, **k: fake)
 
-    def _swr(tg, chat, text, message_thread_id=None, attempts=4):
-        tg.send_message(chat, text, message_thread_id)
+    def _swr(tg, chat, text, message_thread_id=None, parse_mode=None, attempts=4):
+        tg.send_message(chat, text, message_thread_id, parse_mode)
         return True
 
     monkeypatch.setattr(broker, "send_with_retry", _swr)

@@ -94,7 +94,9 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 4개 추가 (절�
 
 ## 사용
 
-- 프롬프트(`🧑`)와 응답(`🤖`)이 토픽에 미러링된다.
+- 프롬프트(`🧑`)와 응답(`🤖`)이 토픽에 미러링된다. Claude의 Markdown은 텔레그램
+  HTML(굵게·기울임·`코드`·코드블록·인용·링크)로 변환돼 나간다. 표는 고정폭
+  블록으로, 표현 못 하는 서식은 평문으로 떨어진다.
 - **토픽에 메시지를 쓰면 몇 초 내로 세션에 주입된다** — 턴 중이든 idle이든. 대기·
   arm 같은 건 없다.
 - 소켓이 잠깐 안 잡히면(세션 재시작 등) 메시지는 `inbox/`에 큐잉됐다가 매 루프
@@ -186,7 +188,7 @@ journalctl --user -u claude-bridge-telegram.service -f
 
 ```
 <레포>/                          # 코드 — 아무 경로
-  src/claude_bridge_telegram/    # 브로커, CLI, 텔레그램 클라이언트, inject, config
+  src/claude_bridge_telegram/    # 브로커, CLI, 텔레그램 클라이언트, inject, render, config
   hooks/                         # session_start / user_prompt_submit / stop / session_end (stdlib 전용)
   service/                       # systemd 유닛 템플릿 + install.sh / uninstall.sh
   tests/                         # pytest (네트워크·실제 ~/.claude 안 씀)

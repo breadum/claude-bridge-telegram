@@ -28,7 +28,7 @@ def test_registration_creates_topic(monkeypatch):
     assert rec["status"] == "active"
     assert paths.thread_file(101).read_text() == "s1"
     assert fake.created == [(-1001, "proj …")]
-    assert any("proj" in t for _, t, _ in fake.sent)  # header sent to topic
+    assert any("proj" in t for _, t, *_ in fake.sent)  # header sent to topic
     assert not (paths.REGISTER / "s1.json").exists()
 
 
@@ -73,7 +73,7 @@ def test_failed_injection_is_queued_for_retry(monkeypatch):
 
     lines = paths.inbox_file("s1").read_text().splitlines()
     assert json.loads(lines[0])["text"] == "later"
-    assert any("재시도" in t for _, t, _ in fake.sent)
+    assert any("재시도" in t for _, t, *_ in fake.sent)
 
     # now the socket comes back; retry drains the queue
     ok = []
@@ -115,7 +115,7 @@ def test_message_to_ended_session_is_ignored(monkeypatch):
 
     monkeypatch.setattr(broker, "inject_user_message", lambda *a: (_ for _ in ()).throw(AssertionError("injected!")))
     b._handle_message({"message_thread_id": 101, "text": "hello?"})
-    assert any("ended" in t for _, t, _ in fake.sent)
+    assert any("ended" in t for _, t, *_ in fake.sent)
 
 
 def test_outbox_titles_topic_from_ai_title(monkeypatch):
@@ -150,3 +150,26 @@ def test_outbox_without_ai_title_does_not_rename(monkeypatch):
     assert fake.edited == []
     rec = json.loads(paths.session_file("s1").read_text())
     assert rec.get("titled") is False
+
+
+def test_outbox_renders_markdown_as_html(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+    fake.sent.clear()
+
+    d = paths.outbox_dir("s1")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "001.json").write_text(json.dumps(
+        {"role": "assistant", "text": "## Done\n\n**bold** and `code` and <raw>"}
+    ))
+    b._process_outbox()
+
+    _, text, thread, parse_mode = fake.sent[-1]
+    assert parse_mode == "HTML"
+    assert text.startswith("🤖 ")
+    assert "<b>Done</b>" in text
+    assert "<b>bold</b>" in text
+    assert "<code>code</code>" in text
+    assert "&lt;raw&gt;" in text and "<raw>" not in text
+    assert "##" not in text and "**" not in text
