@@ -115,8 +115,7 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 5개 추가 (절�
 | 명령 | 효과 |
 |---|---|
 | `/status` | 라벨, 상태, 소켓 도달 여부, 재시도 대기 수, cwd |
-| `/stop` | 이 세션에 더 이상 전달 안 함 (토픽은 유지) |
-| `/close` | `/stop` + 토픽 삭제 + 로컬 상태 정리 |
+| `/exit` | 이 토픽을 삭제. **로컬 세션 기록은 남긴다** — 터미널 `/exit`가 트랜스크립트를 안 지우는 것과 같다. 브로커는 이 세션 미러링·주입을 멈추고, 세션이 다시 살아나면 새 토픽을 만든다. 기록까지 지우려면 `bridge prune` |
 | `/title <text>` | 토픽 이름 수동 변경 |
 | `/sessions` | 전체 세션 목록 |
 | `/help` | 명령 목록 |
@@ -149,11 +148,11 @@ Claude Code가 세션에 붙인 제목(`ai-title`)을 그대로 가져온다. `S
 
 | 상황 | 방법 |
 |---|---|
-| 한 세션만 | 그 토픽에서 `/close` |
-| 끝난 세션 일괄 | `bridge prune` (`status=ended`인 것) |
+| 토픽 하나 치우기 | 그 토픽에서 `/exit` (기록은 `bridge prune` 때까지 남음) |
+| 끝난 세션 일괄 정리 | `bridge prune` (`status=ended` — `/exit`했거나 세션 종료된 것) |
 | 전부 | `bridge prune --all` (`-y`로 확인 생략) |
-| 세션에서 `/exit` | `SessionEnd` 훅 → 기본은 상태만 `ended` 표시, **토픽은 남김** |
-| `/exit` 시 토픽도 삭제 | `config.json`에 `"delete_topic_on_end": true` → 브로커 재시작 |
+| 터미널에서 세션 `/exit` | `SessionEnd` 훅 → 기본은 상태만 `ended` 표시, **토픽은 남김** |
+| 터미널 `/exit` 시 토픽도 삭제 | `config.json`에 `"delete_topic_on_end": true` → 브로커 재시작 |
 
 ## 설정
 

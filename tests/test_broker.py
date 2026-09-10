@@ -83,34 +83,62 @@ def test_failed_injection_is_queued_for_retry(monkeypatch):
     assert paths.inbox_file("s1").read_text().strip() == ""
 
 
-def test_slash_stop_marks_ended_and_clears_queue(monkeypatch):
+def test_slash_exit_deletes_topic_but_keeps_session_record(monkeypatch):
     b, fake = fakes.install(monkeypatch)
     _register()
     b._process_registrations()
     broker._inbox_append("s1", "queued")
+    paths.outbox_dir("s1").mkdir(parents=True, exist_ok=True)
+    (paths.outbox_dir("s1") / "x.json").write_text('{"role":"assistant","text":"hi"}')
 
-    b._handle_message({"message_thread_id": 101, "text": "/stop"})
-    rec = json.loads(paths.session_file("s1").read_text())
-    assert rec["status"] == "ended"
+    b._handle_message({"message_thread_id": 101, "text": "/exit"})
+
+    assert fake.deleted == [(-1001, 101)]
+    assert not paths.thread_file(101).exists()          # dead routing dropped
     assert paths.inbox_file("s1").read_text().strip() == ""
+    assert not paths.outbox_dir("s1").exists()          # mirror queue wiped
+    rec = json.loads(paths.session_file("s1").read_text())  # record kept
+    assert rec["status"] == "ended"
 
 
-def test_slash_close_deletes_topic_and_state(monkeypatch):
+def test_exited_session_outbox_is_dropped_not_retried(monkeypatch):
     b, fake = fakes.install(monkeypatch)
     _register()
     b._process_registrations()
+    b._handle_message({"message_thread_id": 101, "text": "/exit"})
+    fake.sent.clear()
 
-    b._handle_message({"message_thread_id": 101, "text": "/close"})
-    assert fake.deleted == [(-1001, 101)]
-    assert not paths.session_file("s1").exists()
-    assert not paths.thread_file(101).exists()
+    d = paths.outbox_dir("s1")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "late.json").write_text('{"role":"assistant","text":"late reply"}')
+    b._process_outbox()
+    assert fake.sent == []
+    assert not d.exists()
+
+
+def test_resume_after_exit_gets_a_fresh_topic(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+    b._handle_message({"message_thread_id": 101, "text": "/exit"})
+
+    _register()  # SessionStart fires again on resume
+    b._process_registrations()
+
+    assert len(fake.created) == 2                       # a new topic, not reused
+    rec = json.loads(paths.session_file("s1").read_text())
+    assert rec["status"] == "active"
+    assert rec["thread_id"] == 102
 
 
 def test_message_to_ended_session_is_ignored(monkeypatch):
     b, fake = fakes.install(monkeypatch)
     _register()
     b._process_registrations()
-    b._handle_message({"message_thread_id": 101, "text": "/stop"})
+    # mark ended without deleting the topic (SessionEnd, delete_topic_on_end off)
+    rec = json.loads(paths.session_file("s1").read_text())
+    rec["status"] = "ended"
+    paths.session_file("s1").write_text(json.dumps(rec))
     fake.sent.clear()
 
     monkeypatch.setattr(broker, "inject_user_message", lambda *a: (_ for _ in ()).throw(AssertionError("injected!")))

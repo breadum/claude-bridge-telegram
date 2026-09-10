@@ -6,7 +6,7 @@ Single long-running process. It is the *only* thing that talks to Telegram:
   * long-polls getUpdates and injects each topic message into the matching
     running Claude Code session over its [uds-messaging] socket
   * ships outbox/<sid>/*.json (mirrored prompts + responses) back to the topic
-  * handles /status /stop /close /title without touching the session
+  * handles /status /exit /title without touching the session
 
 Hooks never call Telegram and never block; they only read/write files under
 paths.ROOT. Delivery of a Telegram message into a session does not involve a
@@ -37,7 +37,7 @@ log = logging.getLogger("bridge.broker")
 # getUpdates long-poll seconds. Also the loop cadence and the worst-case latency
 # for shipping a response to Telegram / retrying a failed injection.
 POLL_TIMEOUT = 10
-SPECIAL = {"/stop", "/status", "/sessions", "/help", "/close", "/title"}
+SPECIAL = {"/status", "/sessions", "/help", "/exit", "/title"}
 
 
 def _now() -> str:
@@ -104,6 +104,14 @@ def _inbox_rewrite(sid: str, lines: list[str]) -> None:
         f.write_text(("\n".join(lines) + "\n") if lines else "")
 
 
+def _wipe_outbox(sid: str) -> None:
+    outdir = paths.outbox_dir(sid)
+    if outdir.exists():
+        for f in outdir.iterdir():
+            f.unlink(missing_ok=True)
+        outdir.rmdir()
+
+
 def _forget_session(sid: str, thread_id: int | None) -> None:
     """Wipe all local state for a session. Does NOT delete the Telegram topic."""
     inbox = paths.inbox_file(sid)
@@ -117,11 +125,7 @@ def _forget_session(sid: str, thread_id: int | None) -> None:
         p.unlink(missing_ok=True)
     if thread_id is not None:
         paths.thread_file(thread_id).unlink(missing_ok=True)
-    outdir = paths.outbox_dir(sid)
-    if outdir.exists():
-        for f in outdir.iterdir():
-            f.unlink(missing_ok=True)
-        outdir.rmdir()
+    _wipe_outbox(sid)
 
 
 # --------------------------------------------------------------------------
@@ -195,6 +199,14 @@ class Broker:
             sid = req.get("session_id") or f.stem
 
             existing = _read_session(sid)
+            if existing and existing.get("status") == "ended":
+                # The session was /exit'd (or ended) but has come back. Drop the
+                # frozen record + its dead topic mapping and fall through to make
+                # a fresh topic for this run.
+                paths.thread_file(existing.get("thread_id")).unlink(missing_ok=True)
+                paths.session_file(sid).unlink(missing_ok=True)
+                log.info("session %s resumed after exit — new topic", existing.get("label", sid))
+                existing = None
             if existing:
                 # resume/clear: pid (hence socket) may have changed -> refresh.
                 changed = False
@@ -249,7 +261,7 @@ class Broker:
                     if can_inject
                     else "⚠️ 이 세션은 소켓 정보가 없어 여기서 명령을 넣을 수 없습니다 (미러 전용).\n"
                 )
-                + "/status  /stop  /close  /title <text>"
+                + "/status  /exit  /title <text>"
             )
             send_with_retry(self.tg, self.cfg.chat_id, header, message_thread_id=thread_id)
             log.info("registered %s -> topic %s (inject=%s)", label, thread_id, can_inject)
@@ -290,7 +302,7 @@ class Broker:
             return
 
         if rec.get("status") == "ended":
-            self._say(thread_id, "session has ended — message ignored. (/close to remove this topic)")
+            self._say(thread_id, "session has ended — message ignored. (/exit to delete this topic)")
             return
 
         if not (rec.get("messaging_socket") and rec.get("messaging_token")):
@@ -312,8 +324,7 @@ class Broker:
                 thread_id,
                 "메시지를 그냥 보내면 이 세션에 전달됩니다.\n"
                 "/status        상태 보기\n"
-                "/stop          이 세션에 더 이상 전달하지 않음\n"
-                "/close         전달 중단 + 이 토픽 삭제\n"
+                "/exit          이 토픽 삭제 (로컬 세션 기록은 유지)\n"
                 "/title <text>  토픽 이름 변경\n"
                 "/sessions      전체 세션 목록",
             )
@@ -338,17 +349,21 @@ class Broker:
             )
         elif head == "/sessions":
             self._say(thread_id, _sessions_summary())
-        elif head == "/stop":
+        elif head == "/exit":
+            # Delete the Telegram topic but keep the local session record, the
+            # same way `/exit` in the terminal ends the session without deleting
+            # its transcript. Mark it ended so the broker stops mirroring to the
+            # now-gone topic; `bridge prune` clears the record later.
+            deleted = self.tg.delete_forum_topic(self.cfg.chat_id, thread_id)
+            paths.thread_file(thread_id).unlink(missing_ok=True)
             rec["status"] = "ended"
+            rec["ended"] = _now()
             _write_session(sid, rec)
             _inbox_rewrite(sid, [])
-            self._say(thread_id, "🛑 stop — 이 세션에는 더 이상 메시지를 전달하지 않습니다.")
-        elif head == "/close":
-            deleted = self.tg.delete_forum_topic(self.cfg.chat_id, thread_id)
-            _forget_session(sid, thread_id)
+            _wipe_outbox(sid)
             if not deleted:
-                self._say(thread_id, "stopped; 이 토픽은 삭제하지 못했습니다 — 수동으로 지워주세요.")
-            log.info("closed session %s (topic %s, deleted=%s)", rec["label"], thread_id, deleted)
+                self._say(thread_id, "이 토픽은 삭제하지 못했습니다 — 수동으로 지워주세요.")
+            log.info("exited %s (topic %s deleted=%s, record kept)", rec["label"], thread_id, deleted)
 
     def _reply_general(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
@@ -398,9 +413,12 @@ class Broker:
                 # No session record. If a registration is still pending, hold the
                 # files (topic is about to exist). Otherwise it's an orphan.
                 if not (paths.REGISTER / f"{sid}.json").exists():
-                    for x in sdir.iterdir():
-                        x.unlink(missing_ok=True)
-                    sdir.rmdir()
+                    _wipe_outbox(sid)
+                continue
+            if rec.get("status") == "ended":
+                # /exit or SessionEnd — the topic is gone or frozen, drop the
+                # mirror files instead of retrying forever.
+                _wipe_outbox(sid)
                 continue
             thread_id = rec["thread_id"]
             for f in sorted([*sdir.glob("*.json"), *sdir.glob("*.txt")]):
@@ -447,7 +465,7 @@ class Broker:
                 rec["ended"] = _now()
                 _write_session(sid, rec)
                 if tid is not None:
-                    self._say(tid, "🔴 session ended. (/close to delete this topic)")
+                    self._say(tid, "🔴 session ended. (/exit to delete this topic)")
                 log.info("session %s ended", sid)
             f.unlink(missing_ok=True)
 
