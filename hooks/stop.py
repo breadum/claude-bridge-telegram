@@ -19,7 +19,8 @@ def main() -> None:
     if not sid or not bc.session_file(sid).exists():
         bc.emit()
 
-    bc.queue_outbox(sid, "assistant", bc.last_assistant_text(ev.get("transcript_path", "")))
+    tp = ev.get("transcript_path", "")
+    bc.queue_outbox(sid, "assistant", bc.last_assistant_text(tp), ai_title=bc.last_ai_title(tp))
     bc.emit()
 
 

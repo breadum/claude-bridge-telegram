@@ -2,7 +2,7 @@
 
 Written by `bridge setup` to <ROOT>/config.json. Env vars override individual
 fields (handy for testing): CLAUDE_TG_BOT_TOKEN, CLAUDE_TG_CHAT_ID,
-CLAUDE_TG_DELETE_TOPIC_ON_END, ANTHROPIC_API_KEY, CLAUDE_TG_TITLE_MODEL.
+CLAUDE_TG_DELETE_TOPIC_ON_END.
 """
 
 from __future__ import annotations
@@ -25,10 +25,6 @@ class Config:
     # Telegram topic. Default: keep the topic (delete it later with /close or
     # `bridge prune`).
     delete_topic_on_end: bool = False
-    # Optional: with an Anthropic API key, the topic title is an LLM summary of
-    # the first prompt instead of a truncation. Falls back silently without a key.
-    anthropic_api_key: str = ""
-    title_model: str = "claude-haiku-4-5-20251001"
 
     @classmethod
     def load(cls) -> Config:
@@ -43,10 +39,6 @@ class Config:
             cfg.chat_id = int(v)
         if v := os.environ.get("CLAUDE_TG_DELETE_TOPIC_ON_END"):
             cfg.delete_topic_on_end = v.lower() in ("1", "true", "yes")
-        if v := os.environ.get("ANTHROPIC_API_KEY"):
-            cfg.anthropic_api_key = v
-        if v := os.environ.get("CLAUDE_TG_TITLE_MODEL"):
-            cfg.title_model = v
         return cfg
 
     def save(self) -> None:

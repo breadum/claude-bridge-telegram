@@ -118,7 +118,7 @@ def test_message_to_ended_session_is_ignored(monkeypatch):
     assert any("ended" in t for _, t, _ in fake.sent)
 
 
-def test_outbox_titles_topic_from_first_user_message(monkeypatch):
+def test_outbox_titles_topic_from_ai_title(monkeypatch):
     b, fake = fakes.install(monkeypatch)
     _register()
     b._process_registrations()
@@ -126,9 +126,27 @@ def test_outbox_titles_topic_from_first_user_message(monkeypatch):
 
     d = paths.outbox_dir("s1")
     d.mkdir(parents=True, exist_ok=True)
-    (d / "001.json").write_text(json.dumps({"role": "user", "text": "fix the flaky login test"}))
+    (d / "001.json").write_text(json.dumps(
+        {"role": "assistant", "text": "done", "ai_title": "Fix the flaky login test"}
+    ))
     b._process_outbox()
 
-    assert fake.edited and "fix the flaky login test" in fake.edited[0][2]
+    assert fake.edited and fake.edited[0][2] == "Fix the flaky login test"
     rec = json.loads(paths.session_file("s1").read_text())
     assert rec["titled"] is True
+
+
+def test_outbox_without_ai_title_does_not_rename(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+    fake.edited.clear()
+
+    d = paths.outbox_dir("s1")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "001.json").write_text(json.dumps({"role": "user", "text": "hello"}))
+    b._process_outbox()
+
+    assert fake.edited == []
+    rec = json.loads(paths.session_file("s1").read_text())
+    assert rec.get("titled") is False

@@ -127,10 +127,11 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (절대경
 | `/sessions` | 알려진 모든 세션 목록 |
 | `/help` | 이 목록 |
 
-토픽 이름은 **세션의 첫 프롬프트**로 자동 지정된다 (`<디렉터리>: <제목>`). 그
-전까지는 `<디렉터리> …`. `anthropic_api_key`가 설정돼 있으면 제목은 첫 프롬프트의
-LLM 요약(Haiku)이고, 없으면 첫 문장/절을 잘라 쓴다. `/title <text>`로 언제든
-덮어쓴다.
+토픽 이름은 **Claude Code가 세션에 붙인 제목**을 그대로 가져온다. Claude Code는
+첫 교환 뒤 대화 제목을 스스로 지어 트랜스크립트에 기록하는데(`ai-title`),
+`Stop` 훅이 그걸 실어 보내면 브로커가 토픽 이름으로 쓴다. 제목이 나오기 전까지는
+`<디렉터리> …`. 한 번 지정한 뒤엔 자동으로 바꾸지 않는다 — `/title <text>`로
+언제든 덮어쓴다. (별도 API 키 불필요.)
 
 ### 세션 종료 / 토픽 정리
 
@@ -194,11 +195,9 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 | `bot_token` | – | 텔레그램 봇 토큰 |
 | `chat_id` | – | 슈퍼그룹 ID (음수, `-100…`) |
 | `delete_topic_on_end` | `false` | 세션 종료 시 토픽도 삭제할지. `false`면 토픽은 남고 나중에 `/close`·`bridge prune`으로 정리 |
-| `anthropic_api_key` | `""` | 있으면 토픽 제목을 첫 프롬프트의 **LLM 요약**으로 (Haiku). 없으면 트렁케이션 폴백 |
-| `title_model` | `claude-haiku-4-5-20251001` | 요약에 쓸 모델 |
 
 환경 변수 오버라이드: `CLAUDE_TG_BOT_TOKEN`, `CLAUDE_TG_CHAT_ID`,
-`CLAUDE_TG_DELETE_TOPIC_ON_END`, `ANTHROPIC_API_KEY`, `CLAUDE_TG_TITLE_MODEL`.
+`CLAUDE_TG_DELETE_TOPIC_ON_END`.
 `CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를 옮긴다 (테스트에서 사용).
 
 > **그룹 이름을 바꿔도 설정은 그대로다.** 브리지는 `chat_id`(숫자)만 쓰고 그룹

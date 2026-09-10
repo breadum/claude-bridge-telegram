@@ -29,7 +29,6 @@ from pathlib import Path
 from . import paths
 from .config import Config
 from .inject import InjectError, inject_user_message
-from .summarize import summarize_title
 from .telegram import Telegram, TelegramError, send_with_retry
 
 log = logging.getLogger("bridge.broker")
@@ -350,16 +349,6 @@ class Broker:
                 self._say(thread_id, "stopped; 이 토픽은 삭제하지 못했습니다 — 수동으로 지워주세요.")
             log.info("closed session %s (topic %s, deleted=%s)", rec["label"], thread_id, deleted)
 
-    def _make_title(self, base: str, prompt: str) -> str:
-        summary = None
-        if self.cfg.anthropic_api_key:
-            summary = summarize_title(
-                prompt,
-                api_key=self.cfg.anthropic_api_key,
-                model=self.cfg.title_model,
-            )
-        return _topic_title(base, summary or prompt)
-
     def _reply_general(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
         self.tg.send_message(chat_id, "Send messages inside a session's topic, not here.")
@@ -414,13 +403,13 @@ class Broker:
                 continue
             thread_id = rec["thread_id"]
             for f in sorted([*sdir.glob("*.json"), *sdir.glob("*.txt")]):
-                role, text = _read_outbox_item(f)
-                if role == "user" and not rec.get("titled") and thread_id:
-                    title = self._make_title(rec.get("base", rec.get("label", "")), text)
-                    if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, title):
+                role, text, ai_title = _read_outbox_item(f)
+                if ai_title and not rec.get("titled") and thread_id:
+                    name = ai_title[:128]
+                    if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, name):
                         rec["titled"] = True
                         _write_session(sid, rec)
-                        log.info("titled topic %s: %s", thread_id, title)
+                        log.info("titled topic %s: %s", thread_id, name)
                 ok = send_with_retry(
                     self.tg,
                     self.cfg.chat_id,
@@ -463,37 +452,27 @@ class Broker:
 _ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ "}
 
 
-def _read_outbox_item(path: Path) -> tuple[str, str]:
-    """Return (role, text) for an outbox file. Legacy .txt = assistant text."""
+def _read_outbox_item(path: Path) -> tuple[str, str, str]:
+    """Return (role, text, ai_title) for an outbox file.
+
+    ai_title is Claude Code's own session title when the hook forwarded one,
+    else "". Legacy .txt files are bare assistant text."""
     raw = path.read_text()
     if path.suffix == ".json":
         try:
             obj = json.loads(raw)
-            return str(obj.get("role", "assistant")), str(obj.get("text", ""))
+            return (
+                str(obj.get("role", "assistant")),
+                str(obj.get("text", "")),
+                str(obj.get("ai_title", "")),
+            )
         except (json.JSONDecodeError, AttributeError):
-            return "assistant", raw
-    return "assistant", raw
+            return "assistant", raw, ""
+    return "assistant", raw, ""
 
 
 def _format_outbox(role: str, text: str) -> str:
     return _ROLE_PREFIX.get(role, "") + (text if text.strip() else "(empty)")
-
-
-def _topic_title(base: str, text: str) -> str:
-    """`<cwd>: <short summary>` for a forum topic name.
-
-    `text` is an LLM summary when available, otherwise the raw first prompt —
-    in which case we cut at the first sentence/clause break so it reads like a
-    title rather than a run-on."""
-    line = " ".join(text.split())
-    if len(line) > 64:
-        cut = min(
-            (i for i in (line.find(c, 12) for c in ".?!\n,") if i != -1),
-            default=-1,
-        )
-        line = (line[:cut] if 12 <= cut <= 64 else line[:63].rstrip() + "…")
-    title = f"{base}: {line}" if base else line
-    return title[:128] or base or "session"
 
 
 def _sessions_summary() -> str:

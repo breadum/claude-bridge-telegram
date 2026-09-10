@@ -73,12 +73,8 @@ def cmd_setup() -> None:
                 "      Group settings → Topics → enable, then re-run setup."
             )
 
-    key = input(
-        f"Anthropic API key for topic-title summaries (optional) [{_mask(cfg.anthropic_api_key)}]: "
-    ).strip() or cfg.anthropic_api_key
     cfg.bot_token = token
     cfg.chat_id = chat_id
-    cfg.anthropic_api_key = key
     cfg.save()
     from .config import CONFIG_FILE
 

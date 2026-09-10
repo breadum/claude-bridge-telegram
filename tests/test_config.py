@@ -12,20 +12,18 @@ from claude_bridge_telegram.config import Config
 def test_defaults():
     c = Config()
     assert c.bot_token == ""
+    assert c.chat_id == 0
     assert c.delete_topic_on_end is False
-    assert c.title_model.startswith("claude-")
 
 
 def test_env_overrides(monkeypatch):
     monkeypatch.setenv("CLAUDE_TG_BOT_TOKEN", "abc123")
     monkeypatch.setenv("CLAUDE_TG_CHAT_ID", "-1009999")
     monkeypatch.setenv("CLAUDE_TG_DELETE_TOPIC_ON_END", "true")
-    monkeypatch.setenv("CLAUDE_TG_TITLE_MODEL", "claude-test")
     c = Config.load()
     assert c.bot_token == "abc123"
     assert c.chat_id == -1009999
     assert c.delete_topic_on_end is True
-    assert c.title_model == "claude-test"
 
 
 def test_save_roundtrip_and_perms(bridge_home):

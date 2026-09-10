@@ -64,6 +64,23 @@ def test_stop_hook_mirrors_response_for_registered_session(hook_env, tmp_path):
     assert json.loads(files[0].read_text()) == {"role": "assistant", "text": "the answer"}
 
 
+def test_stop_hook_forwards_ai_title(hook_env, tmp_path):
+    bc.write_json_atomic(bc.session_file("sess-T"), {"session_id": "sess-T", "status": "active"})
+    t = tmp_path / "t.jsonl"
+    t.write_text(
+        json.dumps({"type": "ai-title", "aiTitle": "old title", "sessionId": "sess-T"}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"role": "assistant",
+                     "content": [{"type": "text", "text": "hi"}]}}) + "\n"
+        + json.dumps({"type": "ai-title", "aiTitle": "새 제목", "sessionId": "sess-T"}) + "\n"
+    )
+    r = run_hook("stop.py", {"session_id": "sess-T", "transcript_path": str(t)}, hook_env)
+    assert r.returncode == 0
+    files = list((bc.OUTBOX / "sess-T").iterdir())
+    assert json.loads(files[0].read_text()) == {
+        "role": "assistant", "text": "hi", "ai_title": "새 제목",
+    }
+
+
 def test_user_prompt_submit_mirrors_when_pending(hook_env):
     bc.write_json_atomic(bc.REGISTER / "sess-C.json", {"session_id": "sess-C"})
     r = run_hook("user_prompt_submit.py", {"session_id": "sess-C", "prompt": "  do it  "}, hook_env)

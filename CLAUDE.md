@@ -38,7 +38,9 @@ daemon plus four Claude Code hooks talking through files.
 4. **File-queue contract between hook and broker:**
    - `register/<sid>.json` — session_start → broker makes/refreshes a topic
    - `sessions/<sid>.json` — broker's record (label, thread_id, socket, token, status, titled)
-   - `outbox/<sid>/<ts>.json` — `{"role": "user"|"assistant"|"note", "text": ...}` → broker sends to the topic
+   - `outbox/<sid>/<ts>.json` — `{"role": "user"|"assistant"|"note", "text": ...}`,
+     optional `"ai_title"` (Claude Code's own session title, forwarded by the
+     `Stop` hook — the broker renames the topic to it once) → broker sends to the topic
    - `inbox/<sid>.jsonl` — commands that *failed* to inject, retried each loop
    - `end/<sid>.json` — session_end → broker marks ended / deletes topic
    Change the `outbox` JSON shape and you must change both the hook that writes

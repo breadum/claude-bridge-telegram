@@ -43,15 +43,18 @@ def session_file(sid: str) -> Path:
     return SESSIONS / f"{sid}.json"
 
 
-def queue_outbox(sid: str, role: str, text: str) -> None:
+def queue_outbox(sid: str, role: str, text: str, *, ai_title: str = "") -> None:
     """Drop a message for the broker to deliver to this session's topic.
-    role: "user" | "assistant" | "note". Filenames sort chronologically."""
+    role: "user" | "assistant" | "note". Filenames sort chronologically.
+    ai_title, when set, carries Claude Code's own session title so the broker
+    can name the topic without an LLM call of its own."""
     d = OUTBOX / sid
     d.mkdir(parents=True, exist_ok=True)
     name = f"{ts()}-{secrets.token_hex(2)}.json"
-    (d / name).write_text(
-        json.dumps({"role": role, "text": text}, ensure_ascii=False)
-    )
+    item: dict = {"role": role, "text": text}
+    if ai_title:
+        item["ai_title"] = ai_title
+    (d / name).write_text(json.dumps(item, ensure_ascii=False))
 
 
 # --------------------------------------------------------------------------
@@ -106,6 +109,29 @@ def last_assistant_text(transcript_path: str) -> str:
         if texts:
             best = texts  # keep overwriting -> ends on the last one
     return "\n\n".join(best) if best else "(no text in final response)"
+
+
+def last_ai_title(transcript_path: str) -> str:
+    """Claude Code's own most-recent session title, or "" if none yet.
+
+    Claude Code writes `{"type":"ai-title","aiTitle":"..."}` lines into the
+    transcript once it has named the conversation. We forward the latest so the
+    broker can title the Telegram topic with it."""
+    p = Path(transcript_path) if transcript_path else None
+    if not p or not p.exists():
+        return ""
+    title = ""
+    for line in p.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line or '"ai-title"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") == "ai-title" and obj.get("aiTitle"):
+            title = str(obj["aiTitle"])
+    return title
 
 
 # --------------------------------------------------------------------------
