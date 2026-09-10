@@ -3,6 +3,8 @@ name = "claude-bridge-telegram"
 version = "0.1.0"
 description = "Bridge Claude Code sessions to Telegram forum topics: stream responses out, inject commands back in."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "breadum", email = "breadum.kr@gmail.com" }
 ]
@@ -21,6 +23,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ruff>=0.16.6",
+    "pytest>=8.3.0",
 ]
 
 [tool.ruff]
@@ -31,3 +34,12 @@ target-version = "py312"
 # PYI034: __enter__ returning the class name (not Self) is fine here.
 # SIM115: the daemon keeps a log file handle open for the child process.
 ignore = ["PYI034", "SIM115"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests deliberately unpack fixtures they don't always use and run subprocesses
+# without check=; neither warrants noise.
+"tests/**" = ["RUF059", "PLW1510", "S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

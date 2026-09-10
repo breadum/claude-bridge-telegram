@@ -3,11 +3,14 @@
 Single long-running process. It is the *only* thing that talks to Telegram:
 
   * turns SessionStart registrations into forum topics
-  * long-polls getUpdates and routes each topic message into inbox/<sid>.jsonl
-  * ships outbox/<sid>/*.txt back out to the matching topic
-  * handles /status /stop /pause /resume without touching the session
+  * long-polls getUpdates and injects each topic message into the matching
+    running Claude Code session over its [uds-messaging] socket
+  * ships outbox/<sid>/*.json (mirrored prompts + responses) back to the topic
+  * handles /status /stop /close /title without touching the session
 
-Hooks never call Telegram; they only read/write files under paths.ROOT.
+Hooks never call Telegram and never block; they only read/write files under
+paths.ROOT. Delivery of a Telegram message into a session does not involve a
+hook at all — the broker connects to $CLAUDE_CODE_MESSAGING_SOCKET directly.
 """
 
 from __future__ import annotations
@@ -25,18 +28,16 @@ from pathlib import Path
 
 from . import paths
 from .config import Config
+from .inject import InjectError, inject_user_message
 from .summarize import summarize_title
 from .telegram import Telegram, TelegramError, send_with_retry
 
 log = logging.getLogger("bridge.broker")
 
-# getUpdates long-poll seconds. Also the worst-case latency for shipping a
-# response to Telegram, since the loop spends most of its time parked here.
+# getUpdates long-poll seconds. Also the loop cadence and the worst-case latency
+# for shipping a response to Telegram / retrying a failed injection.
 POLL_TIMEOUT = 10
-SPECIAL = {
-    "/stop", "/pause", "/resume", "/status", "/sessions",
-    "/help", "/arm", "/disarm", "/close", "/title",
-}
+SPECIAL = {"/stop", "/status", "/sessions", "/help", "/close", "/title"}
 
 
 def _now() -> str:
@@ -83,19 +84,33 @@ def _locked(path: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def _append_inbox(sid: str, item: dict) -> None:
+def _inbox_append(sid: str, text: str) -> None:
+    """Queue a command that failed to inject, for retry on a later loop."""
     f = paths.inbox_file(sid)
     with _locked(f), f.open("a") as fh:
-        fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+        fh.write(json.dumps({"text": text, "ts": _now()}, ensure_ascii=False) + "\n")
+
+
+def _inbox_lines(sid: str) -> list[str]:
+    f = paths.inbox_file(sid)
+    if not f.exists():
+        return []
+    return [ln for ln in f.read_text().splitlines() if ln.strip()]
+
+
+def _inbox_rewrite(sid: str, lines: list[str]) -> None:
+    f = paths.inbox_file(sid)
+    with _locked(f):
+        f.write_text(("\n".join(lines) + "\n") if lines else "")
 
 
 def _forget_session(sid: str, thread_id: int | None) -> None:
     """Wipe all local state for a session. Does NOT delete the Telegram topic."""
+    inbox = paths.inbox_file(sid)
     for p in (
         paths.session_file(sid),
-        paths.inbox_file(sid),
-        paths.inbox_file(sid).with_name(paths.inbox_file(sid).name + ".lock"),
-        paths.counter_file(sid),
+        inbox,
+        inbox.with_name(inbox.name + ".lock"),
         paths.REGISTER / f"{sid}.json",
         paths.END / f"{sid}.json",
     ):
@@ -132,7 +147,8 @@ class Broker:
         while self._running:
             try:
                 self._process_registrations()
-                self._process_outbox()   # deliver responses before any "ended" notice
+                self._process_outbox()   # mirror prompts/responses to topics
+                self._process_inbox()    # retry commands that failed to inject
                 self._process_end()
                 self._process_updates()  # long-poll (POLL_TIMEOUT) sits here
             except TelegramError as e:
@@ -167,6 +183,8 @@ class Broker:
 
     # --- registrations -> topics -----------------------------------
 
+    _MSG_FIELDS = ("messaging_socket", "messaging_token", "pid")
+
     def _process_registrations(self) -> None:
         for f in sorted(paths.REGISTER.glob("*.json")):
             try:
@@ -175,13 +193,24 @@ class Broker:
                 f.unlink(missing_ok=True)
                 continue
             sid = req.get("session_id") or f.stem
-            if _read_session(sid):
-                f.unlink(missing_ok=True)  # already registered
+
+            existing = _read_session(sid)
+            if existing:
+                # resume/clear: pid (hence socket) may have changed -> refresh.
+                changed = False
+                for k in self._MSG_FIELDS:
+                    if req.get(k) and req.get(k) != existing.get(k):
+                        existing[k] = req[k]
+                        changed = True
+                if changed:
+                    _write_session(sid, existing)
+                    log.info("refreshed messaging socket for %s", existing.get("label", sid))
+                f.unlink(missing_ok=True)
                 continue
+
             label = req.get("label") or sid[:12]
             cwd = req.get("cwd", "?")
             base = req.get("base") or label
-            # Start with a plain, readable name; the first user prompt renames it.
             initial = f"{base} …"
             try:
                 thread_id = self.tg.create_forum_topic(self.cfg.chat_id, initial)
@@ -201,25 +230,31 @@ class Broker:
                 "cwd": cwd,
                 "thread_id": thread_id,
                 "status": "active",
-                "paused": False,
-                "armed": self.cfg.arm_on_start,
                 "titled": False,
+                "messaging_socket": req.get("messaging_socket", ""),
+                "messaging_token": req.get("messaging_token", ""),
+                "pid": req.get("pid", ""),
                 "started": _now(),
             }
             _write_session(sid, rec)
             paths.thread_file(thread_id).write_text(sid)
             f.unlink(missing_ok=True)
+            can_inject = bool(rec["messaging_socket"] and rec["messaging_token"])
             header = (
                 f"🟢 {base}\n"
                 f"cwd: {cwd}\n"
                 f"id: {sid}\n\n"
-                "여기에 답장하면 이 세션의 다음 지시가 됩니다 (첫 메시지가 세션을 arm).\n"
-                "/status  /arm  /disarm  /pause  /resume  /stop  /close  /title <text>"
+                + (
+                    "여기에 메시지를 보내면 이 세션에 바로 전달됩니다.\n"
+                    if can_inject
+                    else "⚠️ 이 세션은 소켓 정보가 없어 여기서 명령을 넣을 수 없습니다 (미러 전용).\n"
+                )
+                + "/status  /stop  /close  /title <text>"
             )
             send_with_retry(self.tg, self.cfg.chat_id, header, message_thread_id=thread_id)
-            log.info("registered %s -> topic %s", label, thread_id)
+            log.info("registered %s -> topic %s (inject=%s)", label, thread_id, can_inject)
 
-    # --- inbound updates -> inbox ---------------------------------
+    # --- inbound updates -> session -------------------------------
 
     def _process_updates(self) -> None:
         updates = self.tg.get_updates(offset=self._offset, timeout=POLL_TIMEOUT)
@@ -255,28 +290,32 @@ class Broker:
             return
 
         if rec.get("status") == "ended":
-            self._say(thread_id, "session has ended — command ignored.")
+            self._say(thread_id, "session has ended — message ignored. (/close to remove this topic)")
             return
 
-        _append_inbox(sid, {"text": text, "update_id": msg.get("message_id"), "ts": _now()})
-        if not rec.get("armed"):
-            rec["armed"] = True
-            _write_session(sid, rec)
-        log.info("queued command for %s (%d chars)", rec["label"], len(text))
+        if not (rec.get("messaging_socket") and rec.get("messaging_token")):
+            self._say(thread_id, "이 세션은 소켓 정보가 없어 메시지를 넣을 수 없습니다 (미러 전용).")
+            return
+
+        try:
+            inject_user_message(rec["messaging_socket"], rec["messaging_token"], text)
+            log.info("injected -> %s (%d chars)", rec["label"], len(text))
+        except InjectError as e:
+            _inbox_append(sid, text)
+            self._say(thread_id, "⚠️ 세션에 바로 연결하지 못했습니다. 큐에 넣고 재시도합니다.")
+            log.warning("inject failed for %s: %s (queued)", rec["label"], e)
 
     def _handle_special(self, sid: str, rec: dict, thread_id: int, cmd: str) -> None:
         head = cmd.split()[0]
         if head == "/help":
             self._say(
                 thread_id,
-                "/status        show state\n"
-                "/arm           wait full poll window for commands\n"
-                "/disarm        only glance briefly (frees the terminal)\n"
-                "/pause         hold commands until /resume\n"
-                "/resume        deliver held commands\n"
-                "/stop          stop injecting into this session\n"
-                "/close         stop, then delete this topic\n"
-                "/title <text>  rename this topic",
+                "메시지를 그냥 보내면 이 세션에 전달됩니다.\n"
+                "/status        상태 보기\n"
+                "/stop          이 세션에 더 이상 전달하지 않음\n"
+                "/close         전달 중단 + 이 토픽 삭제\n"
+                "/title <text>  토픽 이름 변경\n"
+                "/sessions      전체 세션 목록",
             )
         elif head == "/title":
             new = cmd[len("/title"):].strip()
@@ -288,44 +327,27 @@ class Broker:
             else:
                 self._say(thread_id, "couldn't rename the topic.")
         elif head == "/status":
-            n = _inbox_len(sid)
+            sock = rec.get("messaging_socket", "")
+            reachable = bool(sock) and Path(sock).exists()
+            pending = len(_inbox_lines(sid))
             self._say(
                 thread_id,
                 f"label: {rec['label']}\nstatus: {rec['status']}"
-                f"\narmed: {rec.get('armed', False)}\npaused: {rec.get('paused', False)}"
-                f"\nqueued commands: {n}\ncwd: {rec['cwd']}",
+                f"\nsocket: {'ok' if reachable else ('missing' if sock else 'unknown')}"
+                f"\npending (retry): {pending}\ncwd: {rec['cwd']}",
             )
-        elif head == "/arm":
-            rec["armed"] = True
-            _write_session(sid, rec)
-            self._say(thread_id, "🎯 armed — Stop hook will wait the full poll window for commands.")
-        elif head == "/disarm":
-            rec["armed"] = False
-            _write_session(sid, rec)
-            self._say(thread_id, "💤 disarmed — Stop hook will only glance briefly; terminal stays responsive.")
         elif head == "/sessions":
             self._say(thread_id, _sessions_summary())
-        elif head == "/pause":
-            rec["paused"] = True
-            _write_session(sid, rec)
-            self._say(thread_id, "⏸ paused — commands will queue until /resume.")
-        elif head == "/resume":
-            rec["paused"] = False
-            _write_session(sid, rec)
-            self._say(thread_id, f"▶️ resumed — {_inbox_len(sid)} queued command(s) will be delivered.")
         elif head == "/stop":
             rec["status"] = "ended"
             _write_session(sid, rec)
-            # tell the hook to stop waiting
-            _append_inbox(sid, {"control": "stop", "ts": _now()})
-            self._say(thread_id, "🛑 stop signalled — the session will not receive further commands.")
+            _inbox_rewrite(sid, [])
+            self._say(thread_id, "🛑 stop — 이 세션에는 더 이상 메시지를 전달하지 않습니다.")
         elif head == "/close":
-            _append_inbox(sid, {"control": "stop", "ts": _now()})
             deleted = self.tg.delete_forum_topic(self.cfg.chat_id, thread_id)
             _forget_session(sid, thread_id)
             if not deleted:
-                # topic couldn't be deleted (e.g. it's the General topic); say so
-                self._say(thread_id, "stopped; could not delete this topic — remove it manually.")
+                self._say(thread_id, "stopped; 이 토픽은 삭제하지 못했습니다 — 수동으로 지워주세요.")
             log.info("closed session %s (topic %s, deleted=%s)", rec["label"], thread_id, deleted)
 
     def _make_title(self, base: str, prompt: str) -> str:
@@ -340,10 +362,37 @@ class Broker:
 
     def _reply_general(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
-        self.tg.send_message(
-            chat_id,
-            "Send commands inside a session's topic, not here.",
-        )
+        self.tg.send_message(chat_id, "Send messages inside a session's topic, not here.")
+
+    # --- inbox retry -> session ---------------------------------
+
+    def _process_inbox(self) -> None:
+        for f in sorted(paths.INBOX.glob("*.jsonl")):
+            sid = f.stem
+            lines = _inbox_lines(sid)
+            if not lines:
+                continue
+            rec = _read_session(sid)
+            if rec is None or rec.get("status") == "ended":
+                _inbox_rewrite(sid, [])
+                continue
+            sock, tok = rec.get("messaging_socket", ""), rec.get("messaging_token", "")
+            if not (sock and tok):
+                continue
+            remaining = list(lines)
+            for line in lines:
+                try:
+                    text = json.loads(line).get("text", "")
+                except json.JSONDecodeError:
+                    remaining.pop(0)
+                    continue
+                try:
+                    inject_user_message(sock, tok, text)
+                except InjectError:
+                    break  # still unreachable; keep this line and the rest
+                remaining.pop(0)
+                log.info("retry-injected -> %s", rec["label"])
+            _inbox_rewrite(sid, remaining)
 
     # --- outbox -> telegram --------------------------------------
 
@@ -357,8 +406,7 @@ class Broker:
             rec = _read_session(sid)
             if rec is None:
                 # No session record. If a registration is still pending, hold the
-                # files (topic is about to exist). Otherwise it's an orphan left
-                # by a closed/ended session — drop it.
+                # files (topic is about to exist). Otherwise it's an orphan.
                 if not (paths.REGISTER / f"{sid}.json").exists():
                     for x in sdir.iterdir():
                         x.unlink(missing_ok=True)
@@ -367,8 +415,7 @@ class Broker:
             thread_id = rec["thread_id"]
             for f in sorted([*sdir.glob("*.json"), *sdir.glob("*.txt")]):
                 role, text = _read_outbox_item(f)
-                # first user prompt -> use it as the topic title
-                if role == "user" and rec and not rec.get("titled") and thread_id:
+                if role == "user" and not rec.get("titled") and thread_id:
                     title = self._make_title(rec.get("base", rec.get("label", "")), text)
                     if self.tg.edit_forum_topic(self.cfg.chat_id, thread_id, title):
                         rec["titled"] = True
@@ -411,13 +458,6 @@ class Broker:
 
     def _say(self, thread_id: int, text: str) -> None:
         send_with_retry(self.tg, self.cfg.chat_id, text, message_thread_id=thread_id)
-
-
-def _inbox_len(sid: str) -> int:
-    f = paths.inbox_file(sid)
-    if not f.exists():
-        return 0
-    return sum(1 for line in f.read_text().splitlines() if line.strip())
 
 
 _ROLE_PREFIX = {"user": "🧑 ", "assistant": "🤖 ", "note": "⚠️ "}
@@ -463,7 +503,7 @@ def _sessions_summary() -> str:
             r = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        rows.append(f"{r['label']:<24} {r['status']:<8} q={_inbox_len(r['session_id'])}")
+        rows.append(f"{r['label']:<24} {r['status']:<8} q={len(_inbox_lines(r['session_id']))}")
     return "\n".join(rows) if rows else "(no sessions)"
 
 

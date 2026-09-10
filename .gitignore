@@ -15,4 +15,5 @@ wheels/
 
 # Tooling
 .ruff_cache/
+.pytest_cache/
 

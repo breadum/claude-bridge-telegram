@@ -73,14 +73,11 @@ def cmd_setup() -> None:
                 "      Group settings → Topics → enable, then re-run setup."
             )
 
-    poll = input(f"Poll minutes (Stop hook wait) [{cfg.poll_minutes}]: ").strip()
     key = input(
         f"Anthropic API key for topic-title summaries (optional) [{_mask(cfg.anthropic_api_key)}]: "
     ).strip() or cfg.anthropic_api_key
     cfg.bot_token = token
     cfg.chat_id = chat_id
-    if poll:
-        cfg.poll_minutes = float(poll)
     cfg.anthropic_api_key = key
     cfg.save()
     from .config import CONFIG_FILE
@@ -199,7 +196,7 @@ def cmd_status() -> None:
     if paths.OFFSET_FILE.exists():
         print(f"offset: {paths.OFFSET_FILE.read_text().strip()}")
     cfg = Config.load()
-    print(f"chat_id: {cfg.chat_id or 'unset'}   poll_minutes: {cfg.poll_minutes}")
+    print(f"chat_id: {cfg.chat_id or 'unset'}")
     sess = sorted(paths.SESSIONS.glob("*.json"))
     print(f"\nsessions ({len(sess)}):")
     for f in sess:
@@ -209,7 +206,8 @@ def cmd_status() -> None:
             continue
         inbox = paths.inbox_file(r["session_id"])
         q = sum(1 for line in inbox.read_text().splitlines() if line.strip()) if inbox.exists() else 0
-        print(f"  {r['label']:<24} {r['status']:<8} paused={r.get('paused', False)!s:<5} q={q}  {r['cwd']}")
+        sock = "sock" if r.get("messaging_socket") else "----"
+        print(f"  {r['label']:<24} {r['status']:<8} {sock} retry={q}  {r['cwd']}")
 
 
 def cmd_logs(follow: bool) -> None:

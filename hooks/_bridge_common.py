@@ -1,14 +1,16 @@
 """Shared helpers for the bridge hooks.
 
 STDLIB ONLY. These scripts run from ~/.claude/settings.json with the system
-python3 on every Stop / SessionStart / SessionEnd, so they must start fast and
-never import the project package or third-party libs.
+python3 on every SessionStart / UserPromptSubmit / Stop / SessionEnd, so they
+must start fast and never import the project package or third-party libs.
+
+All four hooks are non-blocking: they write a small file under paths.ROOT and
+exit. The broker does everything else (topics, Telegram, injecting commands
+back into the session over its [uds-messaging] socket).
 """
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import json
 import os
 import secrets
@@ -28,28 +30,17 @@ def root() -> Path:
 ROOT = root()
 REGISTER = ROOT / "register"
 SESSIONS = ROOT / "sessions"
-INBOX = ROOT / "inbox"
 OUTBOX = ROOT / "outbox"
 END = ROOT / "end"
-COUNTERS = ROOT / "counters"
-CONFIG_FILE = ROOT / "config.json"
 
 
 def ensure_dirs() -> None:
-    for d in (REGISTER, SESSIONS, INBOX, OUTBOX, END, COUNTERS):
+    for d in (REGISTER, SESSIONS, OUTBOX, END):
         d.mkdir(parents=True, exist_ok=True)
-
-
-def inbox_file(sid: str) -> Path:
-    return INBOX / f"{sid}.jsonl"
 
 
 def session_file(sid: str) -> Path:
     return SESSIONS / f"{sid}.json"
-
-
-def counter_file(sid: str) -> Path:
-    return COUNTERS / sid
 
 
 def queue_outbox(sid: str, role: str, text: str) -> None:
@@ -61,29 +52,6 @@ def queue_outbox(sid: str, role: str, text: str) -> None:
     (d / name).write_text(
         json.dumps({"role": role, "text": text}, ensure_ascii=False)
     )
-
-
-# --------------------------------------------------------------------------
-# config (plain JSON, written by `bridge setup`)
-# --------------------------------------------------------------------------
-
-_DEFAULTS = {"poll_minutes": 5.0, "grace_seconds": 5.0, "max_reinjections": 50}
-
-
-def load_config() -> dict:
-    cfg = dict(_DEFAULTS)
-    if CONFIG_FILE.exists():
-        try:
-            cfg.update(json.loads(CONFIG_FILE.read_text()))
-        except (json.JSONDecodeError, OSError):
-            pass
-    if v := os.environ.get("CLAUDE_TG_POLL_MINUTES"):
-        cfg["poll_minutes"] = float(v)
-    if v := os.environ.get("CLAUDE_TG_GRACE_SECONDS"):
-        cfg["grace_seconds"] = float(v)
-    if v := os.environ.get("CLAUDE_TG_MAX_REINJECTIONS"):
-        cfg["max_reinjections"] = int(v)
-    return cfg
 
 
 # --------------------------------------------------------------------------
@@ -102,50 +70,6 @@ def emit(obj: dict | None = None) -> None:
     sys.stdout.write(json.dumps(obj or {}, ensure_ascii=False))
     sys.stdout.flush()
     raise SystemExit(0)
-
-
-def block(reason: str) -> None:
-    """Feed `reason` back into the session as the next instruction."""
-    emit({"decision": "block", "reason": reason})
-
-
-# --------------------------------------------------------------------------
-# locking + inbox queue
-# --------------------------------------------------------------------------
-
-@contextlib.contextmanager
-def locked(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock = path.with_name(path.name + ".lock")
-    with open(lock, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-
-
-def pop_inbox(sid: str) -> dict | None:
-    """Remove and return the oldest queued item, or None."""
-    f = inbox_file(sid)
-    with locked(f):
-        if not f.exists():
-            return None
-        lines = [ln for ln in f.read_text().splitlines() if ln.strip()]
-        if not lines:
-            return None
-        first, rest = lines[0], lines[1:]
-        f.write_text(("\n".join(rest) + "\n") if rest else "")
-    try:
-        return json.loads(first)
-    except json.JSONDecodeError:
-        return None
-
-
-def clear_inbox(sid: str) -> None:
-    f = inbox_file(sid)
-    with locked(f):
-        f.write_text("")
 
 
 # --------------------------------------------------------------------------
