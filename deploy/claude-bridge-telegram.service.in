@@ -5,9 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# %h = the user's home. Assumes the repo is checked out at ~/claude-bridge-telegram
-# and `uv sync` has created .venv there.
-ExecStart=%h/claude-bridge-telegram/.venv/bin/bridge run
+# Paths below are filled in by deploy/install-service.sh from the repo's
+# actual location, so the checkout can live anywhere (not just ~).
+WorkingDirectory=@REPO_DIR@
+ExecStart=@BRIDGE_BIN@ run
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

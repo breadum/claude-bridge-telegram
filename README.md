@@ -43,26 +43,40 @@ topic`. → [문제 해결](#문제-해결) 참고.
 
 ## 2. 설치
 
+레포는 **아무 경로에나** 두면 된다 (`~/code/…`, `/opt/…`, 어디든). 아래 예시의
+`$REPO`만 원하는 위치로 바꿔서 실행:
+
 ```bash
-git clone https://github.com/breadum/claude-bridge-telegram ~/claude-bridge-telegram
-cd ~/claude-bridge-telegram
+REPO=~/code/claude-bridge-telegram          # 원하는 위치로
+git clone https://github.com/breadum/claude-bridge-telegram "$REPO"
+cd "$REPO"
 uv sync                       # 락파일로 .venv 생성
 
 uv run bridge setup           # 토큰 붙여넣기 → ~/.claude/bridge/config.json 생성 (chmod 600)
-uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (자동 백업)
+uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (절대경로로, 자동 백업)
 ./deploy/install-service.sh   # 브로커를 systemd --user 서비스로 상시 실행
 ```
 
+`install-hooks`와 `install-service.sh`는 **스크립트 자기 위치에서 절대경로를
+계산**하므로 레포가 어디에 있든 동작한다. 런타임 상태(`~/.claude/bridge/`)와
+설정 파일은 코드 위치와 무관하게 항상 같은 곳이다.
+
+- **레포를 옮기거나 이름을 바꾼 뒤**: 새 위치에서 `uv sync` →
+  `uv run bridge install-hooks`(옛 절대경로 항목은 자동으로 안 지워지니, 먼저
+  옛 위치에서 `uninstall-hooks` 하거나 `~/.claude/settings.json`을 직접 정리) →
+  `./deploy/install-service.sh`(유닛을 새 경로로 다시 렌더).
+
 임시로 돌려볼 땐 서비스 대신 `uv run bridge start` / `stop`.
-`bridge`를 PATH에 올리려면: `uv tool install --editable ~/claude-bridge-telegram`.
+`bridge`를 PATH에 올리려면: `uv tool install --editable "$REPO"`.
 
 ### 설정(토큰)은 어디에 있나
 
 - **저장소에는 없다.** `bridge setup`이 `~/.claude/bridge/config.json`에 쓴다 —
   머신마다 로컬, git에 안 올라간다.
 - 브로커(`bridge run`)가 실행될 때마다 `$HOME/.claude/bridge/config.json`을
-  읽는다. systemd 유닛은 토큰을 참조하지 않는다 (그래서 `HOME`이 설정돼 있어야
-  한다 — `systemd --user`가 넣어준다).
+  읽는다. systemd 유닛은 토큰도 레포 경로 규칙도 참조하지 않는다 — 다만 `HOME`이
+  설정돼 있어야 하고(`systemd --user`가 넣어준다), 유닛의 `ExecStart`에는
+  `install-service.sh`가 넣어준 `.venv/bin/bridge`의 절대경로가 박힌다.
 - 훅은 이 파일에서 타이밍 값만 읽고 토큰은 안 쓴다 (텔레그램은 브로커만 호출).
 - 다른 머신 = 위 3줄을 그 머신에서 다시 실행. 코드는 `git pull`, 토큰은 그 머신
   `config.json`에.
@@ -157,14 +171,19 @@ uv run bridge uninstall-hooks
 
 ```
 deploy/
-  claude-bridge-telegram.service   # systemd --user 유닛 (%h = 홈, 레포는 ~/claude-bridge-telegram 가정)
-  install-service.sh               # 유닛 복사 → daemon-reload → enable --now → enable-linger
-  uninstall-service.sh             # disable --now → 유닛 삭제 (훅/상태는 안 건드림)
+  claude-bridge-telegram.service.in  # 유닛 템플릿 (@REPO_DIR@ / @BRIDGE_BIN@ 자리표시자)
+  install-service.sh                 # 템플릿을 실제 경로로 렌더 → ~/.config/systemd/user/ 에 설치
+                                     #   → daemon-reload → enable --now → enable-linger
+  uninstall-service.sh               # disable --now → 유닛 삭제 (훅/상태는 안 건드림)
 ```
+
+`install-service.sh`가 스크립트 위치에서 레포 경로를 알아내 템플릿의
+`@REPO_DIR@`(→ `WorkingDirectory`), `@BRIDGE_BIN@`(→ `ExecStart`)을 채운다.
+그래서 레포가 어디에 있든 되고, **레포를 옮기면 이 스크립트만 다시 실행**하면 된다.
 
 ```bash
 uv sync                           # .venv 먼저
-./deploy/install-service.sh       # 멱등 — 유닛 수정/레포 이동 후 다시 실행
+./deploy/install-service.sh       # 멱등 — 템플릿 수정/레포 이동 후 다시 실행
 ```
 
 관리:
@@ -212,9 +231,10 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 ## 디렉터리 구조
 
 ```
-~/claude-bridge-telegram/            # 코드
+<레포>/                       # 코드 — 아무 경로 (예: ~/code/claude-bridge-telegram)
   src/claude_bridge_telegram/        # broker, cli, telegram client, config
   hooks/                       # session_start.py, stop.py, session_end.py (stdlib 전용)
+  deploy/                      # systemd 유닛 템플릿 + 설치 스크립트
 
 ~/.claude/bridge/              # 런타임 상태 (브로커 + 훅 공유)
   config.json
