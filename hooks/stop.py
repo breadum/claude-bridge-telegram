@@ -14,6 +14,8 @@ import _bridge_common as bc
 def main() -> None:
     ev = bc.read_event()
     sid = ev.get("session_id") or ""
+    if sid:
+        bc.clear_busy(sid)  # the turn is done
     # Only act for sessions the broker has a topic for. A session that started
     # before `bridge install-hooks` has no record here -> stay silent.
     if not sid or not bc.session_file(sid).exists():

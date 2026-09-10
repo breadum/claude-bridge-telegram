@@ -50,6 +50,9 @@ daemon plus five Claude Code hooks talking through files.
      `event` (🔔) is what `notification.py` queues when the session wants
      attention, and what `tidy_prompt` downgrades machine turns to.
    - `inbox/<sid>.jsonl` — commands that *failed* to inject, retried each loop
+   - `busy/<sid>` — present between `UserPromptSubmit` and `Stop`: a turn is
+     running. `/status` reads it; a message sent while it exists gets a
+     "queued behind the current turn" note. mtime = turn start.
    - `end/<sid>.json` — session_end → broker marks ended / deletes topic
    Change the `outbox` JSON shape and you must change both the hook that writes
    it (`_bridge_common.queue_outbox`) and `broker._read_outbox_item`.

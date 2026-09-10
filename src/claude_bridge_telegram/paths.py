@@ -30,8 +30,9 @@ THREADS = ROOT / "threads"        # <thread_id> -> file whose content is the sid
 INBOX = ROOT / "inbox"            # <sid>.jsonl : commands that failed to inject, awaiting retry
 OUTBOX = ROOT / "outbox"          # <sid>/<ts>.json : queued outbound messages
 END = ROOT / "end"                # session_end drops <sid>.json here
+BUSY = ROOT / "busy"              # <sid> present : a turn is in progress
 
-ALL_DIRS = [STATE, REGISTER, SESSIONS, THREADS, INBOX, OUTBOX, END]
+ALL_DIRS = [STATE, REGISTER, SESSIONS, THREADS, INBOX, OUTBOX, END, BUSY]
 
 
 def ensure_dirs() -> None:
@@ -53,3 +54,7 @@ def session_file(sid: str) -> Path:
 
 def thread_file(thread_id: int | str) -> Path:
     return THREADS / str(thread_id)
+
+
+def busy_file(sid: str) -> Path:
+    return BUSY / sid

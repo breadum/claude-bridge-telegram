@@ -104,6 +104,20 @@ def _inbox_rewrite(sid: str, lines: list[str]) -> None:
         f.write_text(("\n".join(lines) + "\n") if lines else "")
 
 
+# A turn that has "run" for longer than this is treated as a stale marker left
+# by a crashed session, not real activity.
+_BUSY_STALE_S = 3600
+
+
+def _busy_seconds(sid: str) -> int | None:
+    """Seconds since the session's current turn started, or None if it's idle."""
+    try:
+        age = int(time.time() - paths.busy_file(sid).stat().st_mtime)
+    except OSError:
+        return None
+    return age if 0 <= age < _BUSY_STALE_S else None
+
+
 def _wipe_outbox(sid: str) -> None:
     outdir = paths.outbox_dir(sid)
     if outdir.exists():
@@ -125,6 +139,7 @@ def _forget_session(sid: str, thread_id: int | None) -> None:
         p.unlink(missing_ok=True)
     if thread_id is not None:
         paths.thread_file(thread_id).unlink(missing_ok=True)
+    paths.busy_file(sid).unlink(missing_ok=True)
     _wipe_outbox(sid)
 
 
@@ -205,6 +220,7 @@ class Broker:
                 # a fresh topic for this run.
                 paths.thread_file(existing.get("thread_id")).unlink(missing_ok=True)
                 paths.session_file(sid).unlink(missing_ok=True)
+                paths.busy_file(sid).unlink(missing_ok=True)
                 log.info("session %s resumed after exit — new topic", existing.get("label", sid))
                 existing = None
             if existing:
@@ -309,6 +325,7 @@ class Broker:
             self._say(thread_id, "이 세션은 소켓 정보가 없어 메시지를 넣을 수 없습니다 (미러 전용).")
             return
 
+        busy = _busy_seconds(sid)
         try:
             inject_user_message(rec["messaging_socket"], rec["messaging_token"], text)
             log.info("injected -> %s (%d chars)", rec["label"], len(text))
@@ -316,6 +333,9 @@ class Broker:
             _inbox_append(sid, text)
             self._say(thread_id, "⚠️ 세션에 바로 연결하지 못했습니다. 큐에 넣고 재시도합니다.")
             log.warning("inject failed for %s: %s (queued)", rec["label"], e)
+            return
+        if busy is not None:
+            self._say(thread_id, f"⏳ 작업 중 ({busy}s) — 이 메시지는 현재 턴이 끝난 뒤 처리됩니다.")
 
     def _handle_special(self, sid: str, rec: dict, thread_id: int, cmd: str) -> None:
         head = cmd.split()[0]
@@ -341,9 +361,12 @@ class Broker:
             sock = rec.get("messaging_socket", "")
             reachable = bool(sock) and Path(sock).exists()
             pending = len(_inbox_lines(sid))
+            busy = _busy_seconds(sid)
+            activity = f"🔧 작업 중 ({busy}s)" if busy is not None else "idle"
             self._say(
                 thread_id,
                 f"label: {rec['label']}\nstatus: {rec['status']}"
+                f"\nactivity: {activity}"
                 f"\nsocket: {'ok' if reachable else ('missing' if sock else 'unknown')}"
                 f"\npending (retry): {pending}\ncwd: {rec['cwd']}",
             )
@@ -356,6 +379,7 @@ class Broker:
             # now-gone topic; `bridge prune` clears the record later.
             deleted = self.tg.delete_forum_topic(self.cfg.chat_id, thread_id)
             paths.thread_file(thread_id).unlink(missing_ok=True)
+            paths.busy_file(sid).unlink(missing_ok=True)
             rec["status"] = "ended"
             rec["ended"] = _now()
             _write_session(sid, rec)
@@ -510,7 +534,9 @@ def _sessions_summary() -> str:
             r = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        rows.append(f"{r['label']:<24} {r['status']:<8} q={len(_inbox_lines(r['session_id']))}")
+        sid = r["session_id"]
+        act = "🔧" if _busy_seconds(sid) is not None else "  "
+        rows.append(f"{act} {r['label']:<24} {r['status']:<8} q={len(_inbox_lines(sid))}")
     return "\n".join(rows) if rows else "(no sessions)"
 
 

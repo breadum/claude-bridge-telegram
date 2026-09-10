@@ -203,7 +203,8 @@ def cmd_status() -> None:
         inbox = paths.inbox_file(r["session_id"])
         q = sum(1 for line in inbox.read_text().splitlines() if line.strip()) if inbox.exists() else 0
         sock = "sock" if r.get("messaging_socket") else "----"
-        print(f"  {r['label']:<24} {r['status']:<8} {sock} retry={q}  {r['cwd']}")
+        busy = "busy" if paths.busy_file(r["session_id"]).exists() else "idle"
+        print(f"  {r['label']:<24} {r['status']:<8} {busy} {sock} retry={q}  {r['cwd']}")
 
 
 def cmd_logs(follow: bool) -> None:

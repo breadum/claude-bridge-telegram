@@ -106,7 +106,9 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 5개 추가 (절�
   쓸 때 뜬다. 답은 토픽에 그냥 쓰면 프롬프트 큐에 들어간다 (선택창이 타임아웃된
   뒤 처리). 단순 "your turn" idle 알림은 걸러진다.
 - **토픽에 메시지를 쓰면 몇 초 내로 세션에 주입된다** — 턴 중이든 idle이든. 대기·
-  arm 같은 건 없다.
+  arm 같은 건 없다. Claude가 **작업 중일 때 메시지를 보내면** `⏳ 작업 중 (Ns) —
+  현재 턴이 끝난 뒤 처리됩니다`라고 알려준다. 현재 상태는 `/status`의 `activity`
+  줄(`🔧 작업 중 (Ns)` / `idle`)로도 확인.
 - 소켓이 잠깐 안 잡히면(세션 재시작 등) 메시지는 `inbox/`에 큐잉됐다가 매 루프
   자동 재시도된다.
 
@@ -114,7 +116,7 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 5개 추가 (절�
 
 | 명령 | 효과 |
 |---|---|
-| `/status` | 라벨, 상태, 소켓 도달 여부, 재시도 대기 수, cwd |
+| `/status` | 라벨, 상태, **작업 중 여부**, 소켓 도달 여부, 재시도 대기 수, cwd |
 | `/exit` | 이 토픽을 삭제. **로컬 세션 기록은 남긴다** — 터미널 `/exit`가 트랜스크립트를 안 지우는 것과 같다. 브로커는 이 세션 미러링·주입을 멈추고, 세션이 다시 살아나면 새 토픽을 만든다. 기록까지 지우려면 `bridge prune` |
 | `/title <text>` | 토픽 이름 수동 변경 |
 | `/sessions` | 전체 세션 목록 |
@@ -208,6 +210,7 @@ journalctl --user -u claude-bridge-telegram.service -f
   threads/<tid>                  # → sid
   inbox/<sid>.jsonl              # 주입 실패해 재시도 대기 중인 메시지
   outbox/<sid>/<ts>.json         # {"role","text"[,"ai_title"]} 대기 중인 아웃바운드
+  busy/<sid>                     # 있으면 = 턴 진행 중 (UserPromptSubmit~Stop)
   end/<sid>.json                 # session_end → 브로커가 종료 처리
 ```
 

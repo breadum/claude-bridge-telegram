@@ -33,15 +33,27 @@ REGISTER = ROOT / "register"
 SESSIONS = ROOT / "sessions"
 OUTBOX = ROOT / "outbox"
 END = ROOT / "end"
+BUSY = ROOT / "busy"          # <sid> present = a turn is in progress
 
 
 def ensure_dirs() -> None:
-    for d in (REGISTER, SESSIONS, OUTBOX, END):
+    for d in (REGISTER, SESSIONS, OUTBOX, END, BUSY):
         d.mkdir(parents=True, exist_ok=True)
 
 
 def session_file(sid: str) -> Path:
     return SESSIONS / f"{sid}.json"
+
+
+def mark_busy(sid: str) -> None:
+    """A turn just started for this session."""
+    BUSY.mkdir(parents=True, exist_ok=True)
+    (BUSY / sid).write_text(ts())
+
+
+def clear_busy(sid: str) -> None:
+    """The turn finished (or the session ended)."""
+    (BUSY / sid).unlink(missing_ok=True)
 
 
 def queue_outbox(sid: str, role: str, text: str, *, ai_title: str = "") -> None:

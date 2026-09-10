@@ -12,6 +12,7 @@ def main() -> None:
     if not sid:
         bc.emit()
     bc.ensure_dirs()
+    bc.clear_busy(sid)
     bc.write_json_atomic(
         bc.END / f"{sid}.json",
         {"session_id": sid, "reason": ev.get("reason"), "ts": bc.ts()},

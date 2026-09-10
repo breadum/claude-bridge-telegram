@@ -58,6 +58,38 @@ def test_topic_message_is_injected(monkeypatch):
 
     b._handle_message({"message_thread_id": 101, "text": "run the build"})
     assert calls == [("/run/cc-socks/9.sock", "tok9", "run the build")]
+    # session was idle -> no "queued behind current turn" note
+    assert not any("작업 중" in t for _, t, *_ in fake.sent)
+
+
+def _mark_busy(sid="s1"):
+    paths.BUSY.mkdir(parents=True, exist_ok=True)
+    paths.busy_file(sid).write_text("2026-01-01T00:00:00")
+
+
+def test_message_while_busy_warns_it_is_queued(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+    _mark_busy()
+    monkeypatch.setattr(broker, "inject_user_message", lambda *a: None)
+
+    b._handle_message({"message_thread_id": 101, "text": "one more thing"})
+    assert any("작업 중" in t and "현재 턴" in t for _, t, *_ in fake.sent)
+
+
+def test_status_reports_activity(monkeypatch):
+    b, fake = fakes.install(monkeypatch)
+    _register()
+    b._process_registrations()
+
+    b._handle_message({"message_thread_id": 101, "text": "/status"})
+    assert any("activity: idle" in t for _, t, *_ in fake.sent)
+
+    fake.sent.clear()
+    _mark_busy()
+    b._handle_message({"message_thread_id": 101, "text": "/status"})
+    assert any("activity: 🔧 작업 중" in t for _, t, *_ in fake.sent)
 
 
 def test_failed_injection_is_queued_for_retry(monkeypatch):
@@ -91,10 +123,12 @@ def test_slash_exit_deletes_topic_but_keeps_session_record(monkeypatch):
     paths.outbox_dir("s1").mkdir(parents=True, exist_ok=True)
     (paths.outbox_dir("s1") / "x.json").write_text('{"role":"assistant","text":"hi"}')
 
+    _mark_busy()
     b._handle_message({"message_thread_id": 101, "text": "/exit"})
 
     assert fake.deleted == [(-1001, 101)]
     assert not paths.thread_file(101).exists()          # dead routing dropped
+    assert not paths.busy_file("s1").exists()           # activity marker cleared
     assert paths.inbox_file("s1").read_text().strip() == ""
     assert not paths.outbox_dir("s1").exists()          # mirror queue wiped
     rec = json.loads(paths.session_file("s1").read_text())  # record kept

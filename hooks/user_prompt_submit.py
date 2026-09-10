@@ -22,6 +22,7 @@ def main() -> None:
     pending = (bc.REGISTER / f"{sid}.json").exists()
     if registered or pending:
         bc.queue_outbox(sid, "user", prompt)
+        bc.mark_busy(sid)  # a turn is now running; Stop clears it
     bc.emit()
 
 
