@@ -6,7 +6,7 @@
 ## 뭐가 좋은가
 
 - **세션 하나에 토픽 하나.** 텔레그램 그룹의 Topics 기능을 그대로 쓴다. 세션을
-  다섯 개 돌려도 대화가 안 섞이고, 토픽 이름은 Claude가 대화 내용을 보고 알아서
+  다섯 개 돌려도 대화가 안 섞이고 토픽 이름은 Claude가 대화 내용을 보고 알아서
   붙인다. 그룹 하나로 모든 세션을 관리한다.
 - **자리를 떠도 이어진다.** 데스크탑에서 시작한 작업을 폰에서 확인하고 지시한다.
   마이그레이션이나 큰 리팩터처럼 오래 걸리는 작업을 이동 중에도 붙잡고 갈 수 있다.
@@ -17,7 +17,7 @@
   웹서버도 DB도 없다. 데몬 하나와 훅 몇 개가 파일로 대화한다.
 - **읽을 만하게 나온다.** 마크다운은 텔레그램 서식으로 바뀌고 표는 폭을 맞춘다.
   Claude가 작업 중인지, 입력을 기다리는지도 표시된다.
-- **군더더기가 없다.** 봇 토큰은 로컬 설정 파일에만 있고, 훅은 표준 라이브러리만
+- **군더더기가 없다.** 봇 토큰은 로컬 설정 파일에만 있고 훅은 표준 라이브러리만
   쓴다. 밖으로 나가는 건 텔레그램 API 호출뿐이다.
 
 토픽 하나는 대충 이렇게 보인다.
@@ -69,7 +69,7 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 등록. 기존 �
 ```
 
 서비스 없이 잠깐만 써 볼 거면 `uv run bridge start` / `stop`으로 돌려도 된다.
-레포를 옮겼다면 옛 위치에서 `bridge uninstall-hooks`를 하고, 새 위치에서
+레포를 옮겼다면 옛 위치에서 `bridge uninstall-hooks`를 하고 새 위치에서
 `uv sync && uv run bridge install-hooks && ./service/install.sh`를 다시 실행한다.
 
 ### 세션 시작
@@ -83,8 +83,8 @@ claude --dangerously-skip-permissions
 
 ## 사용
 
-프롬프트(`🧑`)와 응답(`🤖`)이 토픽에 그대로 올라온다. 마크다운은 텔레그램 서식
-으로 바뀌고, 표는 폭을 맞춘 고정폭 블록이 된다.
+프롬프트(`🧑`)와 응답(`🤖`)이 토픽에 그대로 올라온다. 마크다운은 텔레그램 서식으로
+바뀌고 표는 폭을 맞춘 고정폭 블록이 된다.
 
 토픽에 메시지를 쓰면 몇 초 안에 세션에 들어간다. Claude가 작업 중이면 현재 턴이
 끝난 뒤에 처리된다고 알려준다.
@@ -139,18 +139,18 @@ journalctl --user -u claude-bridge-telegram.service -f
 ## 권한
 
 브로커가 넣는 메시지는 세션에 peer 메시지로 도착한다. 사람이 친 프롬프트가 아니라
-다른 Claude 세션이 보낸 것으로 취급된다. 그래서 무인으로 돌리려면 두 가지가 필요
-하다.
+다른 Claude 세션이 보낸 것으로 취급된다. 그래서 무인으로 돌리려면 두 가지가
+필요하다.
 
-**`crossSessionInbound: accept`** 를 `~/.claude/settings.json`에 넣는다. 기본값
-이면 Claude Code가 프롬프트를 건너뛰는 세션에 낯선 발신자가 메시지를 넣는 상황을
-막고, 메시지를 보류한다. `accept`면 바로 전달된다.
+**`crossSessionInbound: accept`** 를 `~/.claude/settings.json`에 넣는다. 기본값이면
+프롬프트를 건너뛰는 세션에 낯선 발신자가 메시지를 넣지 못한다. Claude Code가 그
+메시지를 보류한다. `accept`면 바로 전달된다.
 
 **`--dangerously-skip-permissions`** 로 세션을 시작한다. 신뢰 폴더에 `acceptEdits`
 를 걸어도 된다. peer 메시지는 도구 권한 창을 대신 눌러 주지 못하므로, 그 창이
 아예 안 뜨게 해야 한다.
 
-작업 지시는 정상으로 처리되지만, 권한이나 설정을 바꾸는 요청은 신뢰도가 낮아
+작업 지시는 정상으로 처리되지만 권한이나 설정을 바꾸는 요청은 신뢰도가 낮아
 세션이 거절할 수 있다.
 
 ## 작동 방식
@@ -158,8 +158,8 @@ journalctl --user -u claude-bridge-telegram.service -f
 훅은 세션 이벤트마다 `~/.claude/bridge/` 아래에 파일 하나를 쓰고 바로 끝난다.
 표준 라이브러리만 쓰고 블로킹하지 않는다.
 
-브로커는 텔레그램과 이야기하는 유일한 프로세스다. 토픽을 만들고, 응답을
-내보내고, 세션 소켓으로 메시지를 넣는다.
+브로커는 텔레그램과 이야기하는 유일한 프로세스다. 토픽을 만들고 응답을
+내보내고 세션 소켓으로 메시지를 넣는다.
 
 Claude Code 2.x는 세션마다 유닉스 소켓을 연다(`$CLAUDE_CODE_MESSAGING_SOCKET`,
 `$CLAUDE_CODE_MESSAGING_TOKEN`). `SessionStart` 훅이 이 값을 적어 두면 브로커가
@@ -190,7 +190,7 @@ Claude Code 2.x는 세션마다 유닉스 소켓을 연다(`$CLAUDE_CODE_MESSAGI
 그 세션이 `bridge install-hooks` 전에 시작됐다. 세션을 새로 연다.
 
 **`broker already running`**
-죽은 pidfile이 남은 것이다. `~/.claude/bridge/state/broker.pid`를 확인하고,
+죽은 pidfile이 남은 것이다. `~/.claude/bridge/state/broker.pid`를 확인하고
 실제로 안 돌고 있으면 지운다.
 
 ## 개발
