@@ -1,28 +1,38 @@
 # claude-bridge-telegram
 
 Claude Code 세션을 텔레그램에서 조종하는 브리지. 세션마다 텔레그램 그룹 안에
-**포럼 토픽**이 하나씩 생기고 — 세션의 응답은 그 토픽으로 흘러나오고, 토픽에
-당신이 입력한 메시지는 세션의 다음 지시로 주입된다.
+**포럼 토픽**이 하나씩 생기고 — 세션의 프롬프트·응답은 그 토픽으로 흘러나오고,
+토픽에 당신이 쓴 메시지는 돌고 있는 세션에 **바로** 주입된다 (세션이 무언가
+하는 중이든 idle이든).
 
 ```
-Claude Code 세션 ──Stop 훅──▶ outbox/<sid>/ ──▶ 브로커 ──▶ 텔레그램 토픽
-텔레그램 토픽 ──▶ 브로커(getUpdates) ──▶ inbox/<sid> ──Stop 훅──▶ 세션
+Claude Code 세션 ──훅(비블로킹)──▶ outbox/<sid>/ ──▶ 브로커 ──▶ 텔레그램 토픽
+텔레그램 토픽 ──▶ 브로커(getUpdates) ──▶ 세션의 [uds-messaging] 소켓 ──▶ 세션
 ```
 
-- **훅** (`hooks/*.py`, 표준 라이브러리만 사용): `SessionStart` / `Stop` /
-  `SessionEnd` 세 이벤트에서 실행된다. `~/.claude/bridge/` 아래 파일만 건드린다.
+- **훅** (`hooks/*.py`, 표준 라이브러리만): `SessionStart` / `UserPromptSubmit` /
+  `Stop` / `SessionEnd` 네 이벤트에서 실행. **전부 비블로킹** — `~/.claude/bridge/`
+  아래에 작은 파일 하나 쓰고 즉시 종료한다.
 - **브로커** (`bridge` 데몬): 텔레그램과 통신하는 유일한 프로세스. `getUpdates`를
-  독점하므로 동시에 여러 세션이 돌아도 offset 경합이 없다.
+  독점하므로 동시에 여러 세션이 돌아도 offset 경합이 없다. 텔레그램 메시지를
+  세션에 넣는 것도 브로커가 직접 한다 (훅 안 거침).
 
-> **`Stop` 훅이 뭔가?** — Claude Code가 한 턴의 응답을 **마친 직후** 실행되는 훅
-> 이다. 이름이 "Stop"이지만 세션을 멈추는 게 아니라 "응답 종료 시점"을 뜻한다.
-> 이 브리지의 핵심 동작(응답 내보내기 + 명령 주입)이 전부 여기서 일어난다.
-> Claude Code에 "PostHook" 같은 건 없고, 이 `Stop`이 그 역할이다.
+> **세션에 어떻게 메시지를 넣나?** — Claude Code 2.x는 세션마다 유닉스 소켓
+> (`$CLAUDE_CODE_MESSAGING_SOCKET`, 즉 `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`)을
+> 열어두고, `$CLAUDE_CODE_MESSAGING_TOKEN`으로 인증한 클라이언트의 `user` 메시지를
+> 세션 프롬프트 큐로 라우팅한다. `SessionStart` 훅이 이 소켓 경로·토큰을 기록하고,
+> 브로커가 거기 접속해 텔레그램 메시지를 넣는다. 예전엔 `Stop` 훅이 턴 끝마다
+> 몇 분씩 블로킹하며 명령을 기다렸지만, 이제 그런 대기는 없다.
+
+> **`Stop` 훅이 뭔가?** — Claude Code가 한 턴의 응답을 마친 직후 실행되는 훅이다.
+> 이름이 "Stop"이지만 세션을 멈추는 게 아니라 "응답 종료 시점"을 뜻한다. 여기선
+> 그 턴의 마지막 응답을 토픽으로 미러링하는 용도로만 쓴다.
 
 ## 요구 사항
 
-- Python 3.12 (`.python-version`으로 고정, pyenv로 빌드)
+- Python 3.12 (`.python-version`으로 고정)
 - 프로젝트 가상환경용 [uv](https://docs.astral.sh/uv/)
+- Claude Code **2.x** (`[uds-messaging]` 소켓이 있는 버전)
 - 텔레그램 봇 + **Topics(주제)가 켜진 슈퍼그룹**
 
 ## 1. 텔레그램 봇 & 그룹 만들기
@@ -77,8 +87,8 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (절대경
   읽는다. systemd 유닛은 토큰도 레포 경로 규칙도 참조하지 않는다 — 다만 `HOME`이
   설정돼 있어야 하고(`systemd --user`가 넣어준다), 유닛의 `ExecStart`에는
   `install-service.sh`가 넣어준 `.venv/bin/bridge`의 절대경로가 박힌다.
-- 훅은 이 파일에서 타이밍 값만 읽고 토큰은 안 쓴다 (텔레그램은 브로커만 호출).
-- 다른 머신 = 위 3줄을 그 머신에서 다시 실행. 코드는 `git pull`, 토큰은 그 머신
+- 훅은 config를 아예 안 읽는다 (토픽·텔레그램·주입 전부 브로커 몫).
+- 다른 머신 = 위 세 줄을 그 머신에서 다시 실행. 코드는 `git pull`, 토큰은 그 머신
   `config.json`에.
 
 ## 3. 사용
@@ -87,72 +97,53 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 추가 (절대경
 (`<디렉터리명>-<세션ID 앞 4자리>`) 형태의 토픽이 헤더 메시지와 함께 그룹에
 나타난다.
 
-- 세션의 모든 응답이 그 토픽에 표시된다.
-- 토픽에 메시지를 입력하면 → 세션의 다음 지시가 된다.
-- **첫 메시지**를 보내면 세션이 *arm* 된다 (아래 참고).
+- 세션의 프롬프트(`🧑`)와 응답(`🤖`)이 그 토픽에 미러링된다.
+- **토픽에 메시지를 쓰면 곧바로(≈수 초 내) 세션에 주입된다** — 세션이 턴 중이든
+  idle이든 상관없다. 대기·arm 같은 건 없다.
+- 브로커가 꺼져 있으면 주입이 안 된다. 소켓이 잠깐 안 잡히면(세션 재시작 등)
+  메시지는 `inbox/`에 큐잉됐다가 매 루프 재시도된다.
 
-### 텔레그램 메시지가 세션에 언제 들어가나 (중요)
+### 권한 (중요)
 
-텔레그램 토픽에 쓴 메시지는 브로커가 바로 `inbox/<sid>`에 넣지만, **세션에
-주입되는 건 `Stop` 훅이 실행 중일 때뿐이다** (= Claude가 한 턴을 막 끝냈을 때).
-Claude가 아무것도 안 하고 idle이면 `Stop` 훅도 안 돌기 때문에, 메시지는 큐에
-쌓인 채 **다음 턴까지 대기**한다.
+브로커가 넣는 메시지는 세션에 **peer(다른 Claude 세션) 메시지**로 도착한다 —
+1인칭 유저 입력이 아니다. 그래서:
 
-그래서 매 턴이 끝나면 `Stop` 훅은 세션을 idle로 보내기 전에 잠깐 기다린다:
-
-| 상태 | 대기 시간 | 용도 |
-|---|---|---|
-| **un-armed** | `grace_seconds` (5초) | 주로 터미널에서 작업, 텔레그램은 가끔 |
-| **armed** | `poll_minutes` (기본 5분, leaf는 30분) | 텔레그램으로 세션을 계속 조종 |
-
-- 텔레그램 메시지를 한 번 보내면 자동으로 arm 된다. `/arm` / `/disarm`으로 수동 전환.
-- `arm_on_start: true` (설정)면 세션이 **시작부터 armed**라 첫 턴부터 긴 창이 열린다.
-
-**텔레그램만으로 세션을 몰고 가려면:**
-
-1. 터미널에서 `claude` 시작 → 토픽 생성됨
-2. **첫 지시는 터미널에 입력** (아직 `Stop` 훅이 안 돌아서 텔레그램 첫 메시지는
-   큐에만 쌓임)
-3. Claude가 답하면 → `Stop` 훅이 `poll_minutes`만큼 대기 시작 → 이때부터
-   텔레그램 메시지가 몇 초 안에 주입된다
-4. Claude가 답할 때마다 창이 다시 열린다. `poll_minutes` 안에 답장하면 끊김 없이
-   이어진다.
-
-> 대기 중엔 그 터미널이 "생각 중"으로 묶인다. 터미널을 되찾으려면 토픽에서
-> `/disarm` 또는 `/stop`. 이미 idle로 빠진 세션에 큐가 쌓였으면, 그 터미널에서
-> 아무 메시지나 한 번 보내면 큐가 바로 흘러들어간다.
+- **네이티브 도구 권한 프롬프트를 없애지 못한다.** 텔레그램에서 "yes"를 보내도
+  그 다이얼로그는 안 닫힌다.
+- 텔레그램으로 구동할 세션은 `claude --dangerously-skip-permissions`(또는 신뢰
+  폴더 + `acceptEdits` 등)로 시작해야 매끄럽다. 이건 브리지가 못 없애는 셋업
+  요구사항이다.
+- 작업 지시 자체는 정상 처리된다. peer 신뢰도로 취급되는 것뿐이라, 권한·설정
+  변경 같은 민감한 요청은 세션이 거절할 수 있다.
 
 ### 토픽 명령
 
 | 명령 | 효과 |
 |---|---|
-| `/status` | 라벨, armed/paused 상태, 대기 중인 명령 수 |
-| `/arm` / `/disarm` | 긴 대기 창 켜기 / 끄기 |
-| `/pause` / `/resume` | 명령 보류 / 재개 |
-| `/stop` | 이 세션에 대한 명령 주입 중단 (토픽은 남김) |
-| `/close` | `/stop` 한 뒤 **이 토픽을 삭제**하고 세션 상태 정리 |
-| `/title <text>` | 이 토픽 이름 변경 (첫 질문으로 자동 지정되지만 수동 덮어쓰기) |
+| `/status` | 라벨, 상태, 소켓 도달 가능 여부, 재시도 대기 수, cwd |
+| `/stop` | 이 세션에 더 이상 메시지를 전달하지 않음 (토픽은 남김) |
+| `/close` | `/stop` 한 뒤 **이 토픽을 삭제**하고 로컬 상태 정리 |
+| `/title <text>` | 이 토픽 이름 변경 |
 | `/sessions` | 알려진 모든 세션 목록 |
 | `/help` | 이 목록 |
 
-토픽 이름은 **세션의 첫 질문**으로 자동 지정된다 (`<디렉터리>: <제목>`). 그
-전까지는 `<디렉터리> …`. `anthropic_api_key`가 설정돼 있으면 제목은 첫 질문의
-LLM 요약이고, 없으면 첫 문장/절을 잘라 쓴다. `/title <text>`로 언제든 덮어쓴다.
-사용자가 보낸 질문(`🧑`)과 Claude 답변(`🤖`)이 모두 토픽에 미러링된다.
+토픽 이름은 **Claude Code가 세션에 붙인 제목**을 그대로 가져온다. Claude Code는
+첫 교환 뒤 대화 제목을 스스로 지어 트랜스크립트에 기록하는데(`ai-title`),
+`Stop` 훅이 그걸 실어 보내면 브로커가 토픽 이름으로 쓴다. 제목이 나오기 전까지는
+`<디렉터리> …`. 한 번 지정한 뒤엔 자동으로 바꾸지 않는다 — `/title <text>`로
+언제든 덮어쓴다. (별도 API 키 불필요.)
 
 ### 세션 종료 / 토픽 정리
 
 - **한 세션만**: 그 토픽에서 `/close` — 토픽이 삭제되고 로컬 상태(`sessions/`,
-  `threads/`, `inbox/` 등)도 지워진다. (텔레그램에서 토픽을 길게 눌러 직접
-  삭제해도 됨 — 다음 `bridge prune`이 남은 상태를 청소한다.)
+  `threads/`, `inbox/` 등)도 지워진다.
 - **끝난 세션 일괄**: `uv run bridge prune` — `status`가 `ended`인 세션의 토픽 +
   상태를 모두 삭제. 브로커가 켜져 있어도 안전하다.
 - **전부**: `uv run bridge prune --all` (확인 프롬프트, `-y`로 건너뛰기).
-- **세션에서 그냥 `/exit`** 하면 `SessionEnd` 훅이 돈다. 기본 동작은:
-  상태를 `ended`로 표시 + 토픽에 "🔴 session ended." → **토픽은 남는다**
-  (`/close`·`bridge prune` 전까지). 스크롤백을 보존하려는 의도.
-- `/exit` 할 때 토픽도 바로 지우고 싶으면 `~/.claude/bridge/config.json`에
-  `"delete_topic_on_end": true` → 브로커 재시작. 그러면 세션 종료 즉시 토픽 삭제.
+- **세션에서 `/exit`** 하면 `SessionEnd` 훅이 돈다. 기본 동작: 상태를 `ended`로
+  표시 + 토픽에 "🔴 session ended." → **토픽은 남는다** (스크롤백 보존).
+- `/exit` 시 토픽도 바로 지우려면 `~/.claude/bridge/config.json`에
+  `"delete_topic_on_end": true` → 브로커 재시작.
 
 ## 브로커 관리
 
@@ -167,8 +158,6 @@ uv run bridge uninstall-hooks
 
 ### 브로커를 항상 켜두기 (systemd --user)
 
-유닛 파일과 설치 스크립트는 저장소의 [`deploy/`](deploy/)에 있다:
-
 ```
 deploy/
   claude-bridge-telegram.service.in  # 유닛 템플릿 (@REPO_DIR@ / @BRIDGE_BIN@ 자리표시자)
@@ -179,7 +168,7 @@ deploy/
 
 `install-service.sh`가 스크립트 위치에서 레포 경로를 알아내 템플릿의
 `@REPO_DIR@`(→ `WorkingDirectory`), `@BRIDGE_BIN@`(→ `ExecStart`)을 채운다.
-그래서 레포가 어디에 있든 되고, **레포를 옮기면 이 스크립트만 다시 실행**하면 된다.
+레포가 어디에 있든 되고, **레포를 옮기면 이 스크립트만 다시 실행**하면 된다.
 
 ```bash
 uv sync                           # .venv 먼저
@@ -205,23 +194,11 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 |---|---|---|
 | `bot_token` | – | 텔레그램 봇 토큰 |
 | `chat_id` | – | 슈퍼그룹 ID (음수, `-100…`) |
-| `poll_minutes` | 5 | armed 상태 `Stop` 훅 대기 (분) |
-| `grace_seconds` | 5 | un-armed 상태 `Stop` 훅 대기 (초) |
-| `max_reinjections` | 50 | 세션당 연속 주입 안전 상한 |
 | `delete_topic_on_end` | `false` | 세션 종료 시 토픽도 삭제할지. `false`면 토픽은 남고 나중에 `/close`·`bridge prune`으로 정리 |
-| `arm_on_start` | `false` | 세션을 시작부터 armed로. 텔레그램 주도 사용이면 `true` |
-| `anthropic_api_key` | `""` | 있으면 토픽 제목을 첫 질문의 **LLM 요약**으로 (Haiku). 없으면 트렁케이션 폴백 |
-| `title_model` | `claude-haiku-4-5-20251001` | 요약에 쓸 모델 |
 
-각 키는 환경 변수로 덮어쓸 수 있다: `CLAUDE_TG_BOT_TOKEN`,
-`CLAUDE_TG_CHAT_ID`, `CLAUDE_TG_POLL_MINUTES`, `CLAUDE_TG_GRACE_SECONDS`,
-`CLAUDE_TG_MAX_REINJECTIONS`, `CLAUDE_TG_DELETE_TOPIC_ON_END`,
-`CLAUDE_TG_ARM_ON_START`.
+환경 변수 오버라이드: `CLAUDE_TG_BOT_TOKEN`, `CLAUDE_TG_CHAT_ID`,
+`CLAUDE_TG_DELETE_TOPIC_ON_END`.
 `CLAUDE_TG_BRIDGE_HOME`는 상태 디렉터리 전체를 옮긴다 (테스트에서 사용).
-
-> `poll_minutes`는 `Stop` 훅 타임아웃(`deploy` 시 3600초)보다 작아야 한다.
-> 더 길게 쓰려면 `bridge install-hooks`가 넣는 `timeout` 값도 같이 올려야 한다
-> (`hookinstall.py`).
 
 > **그룹 이름을 바꿔도 설정은 그대로다.** 브리지는 `chat_id`(숫자)만 쓰고 그룹
 > 제목은 읽지 않는다. 세션별 토픽 이름을 텔레그램에서 바꿔도 무관하다 (라우팅은
@@ -231,95 +208,101 @@ journalctl --user -u claude-bridge-telegram.service -f    # 또는: bridge logs 
 ## 디렉터리 구조
 
 ```
-<레포>/                       # 코드 — 아무 경로 (예: ~/code/claude-bridge-telegram)
-  src/claude_bridge_telegram/        # broker, cli, telegram client, config
-  hooks/                       # session_start.py, stop.py, session_end.py (stdlib 전용)
-  deploy/                      # systemd 유닛 템플릿 + 설치 스크립트
+<레포>/                              # 코드 — 아무 경로
+  src/claude_bridge_telegram/        # broker, cli, telegram client, inject, config
+  hooks/                             # session_start / user_prompt_submit / stop / session_end (stdlib 전용)
+  deploy/                            # systemd 유닛 템플릿 + 설치 스크립트
+  tests/                             # pytest (네트워크·실제 ~/.claude 안 씀)
 
-~/.claude/bridge/              # 런타임 상태 (브로커 + 훅 공유)
+~/.claude/bridge/                    # 런타임 상태 (브로커 + 훅 공유)
   config.json
   state/{offset, broker.pid, broker.log}
-  register/<sid>.json          # session_start → 브로커가 토픽 생성
-  sessions/<sid>.json          # label, thread_id, status, armed, paused
-  threads/<tid>                # → sid
-  inbox/<sid>.jsonl            # 대기 중인 명령
-  outbox/<sid>/<ts>.txt        # 대기 중인 응답
-  end/<sid>.json               # session_end → 브로커가 종료 표시
+  register/<sid>.json                # session_start → 브로커가 토픽 생성/갱신 (+ messaging_socket/token/pid)
+  sessions/<sid>.json                # label, thread_id, status, titled, messaging_socket, messaging_token
+  threads/<tid>                      # → sid
+  inbox/<sid>.jsonl                  # 주입 실패해 재시도 대기 중인 메시지
+  outbox/<sid>/<ts>.json             # {"role","text"} 대기 중인 아웃바운드
+  end/<sid>.json                     # session_end → 브로커가 종료 처리
 ```
 
 ## 한계
 
-- 명령은 턴이 끝날 때(`Stop`)만 소비된다. 턴 도중 인터럽트는 불가.
-- 완전히 idle이 된 세션(훅이 이미 타임아웃)은 그 터미널에서 엔터를 한 번 눌러야
-  재개된다.
-- 브리지는 *사용자가 하듯이* 명령을 주입한다 — 세션이 할 수 있는 건 다 할 수
-  있다. 본인이 통제하는 그룹에만 봇을 넣고, 토큰은 비밀로 유지할 것.
+- **브로커가 켜져 있어야** 텔레그램 → 세션 주입이 된다 (미러링도). 서비스로
+  상시 실행 권장.
+- 주입 메시지는 peer 프레이밍이라 네이티브 권한 프롬프트를 못 없앤다 →
+  `--dangerously-skip-permissions` 로 세션 시작 ([권한](#권한-중요) 참고).
+- 턴 도중 인터럽트는 불가 — 주입한 메시지는 현재 턴 뒤에 처리된다.
+- Claude Code 1.x 등 `[uds-messaging]` 소켓이 없는 세션은 **미러 전용**이다
+  (토픽 헤더에 그렇게 표시됨). `/close`로 정리.
 
 ## 문제 해결
 
 **`is_forum: None` / `the chat is not a forum`**
 그룹에 Topics가 실제로 안 켜져 있다. 그룹 이름 → 편집 → Topics → 켜기 → 저장.
-그룹에 토픽 목록이 보이는지 확인.
 
 **`not enough rights to create a topic`**
 봇이 관리자지만 *주제 관리(Manage Topics)* 권한이 없다. 그룹 → 관리자 → 봇 →
-**주제 관리** 켜기 → 저장. 확인:
-```bash
-uv run python -c "import httpx;from claude_bridge_telegram.config import Config as C;c=C.load();b=f'https://api.telegram.org/bot{c.bot_token}';me=httpx.get(f'{b}/getMe').json()['result']['id'];print(httpx.get(f'{b}/getChatMember',params={'chat_id':c.chat_id,'user_id':me}).json()['result'].get('can_manage_topics'))"
-```
+**주제 관리** 켜기 → 저장.
 
 **봇이 메시지를 못 받음 (`setup` 중 `0 update(s)`)**
 privacy mode + 아직 관리자 아님, 또는 봇 합류 이전 메시지다. 관리자로 만든 뒤
 *새* 메시지를 보낸다.
 
-**세션 응답이 그룹의 *General* 토픽에 표시됨**
-그 세션이 `bridge install-hooks` **이전에** 시작돼서 `SessionStart`가 토픽을
-등록하지 못했다. 현재 빌드는 등록되지 않은 세션에 대해 `Stop` 훅이 침묵한다 —
-새 `claude` 세션을 시작하면 된다. General에 남은 메시지는 직접 삭제.
+**토픽에 메시지를 보내도 세션에 안 들어감**
+- 브로커가 떠 있나: `bridge status` / `systemctl --user status claude-bridge-telegram.service`
+- `/status` 로 `socket: ok` 인지 확인. `missing`이면 세션이 재시작돼 pid가 바뀐
+  것 — 세션에서 아무 프롬프트나 한 번 주면 `SessionStart` 훅이 소켓을 갱신한다.
+- `unknown`이면 그 세션이 `[uds-messaging]` 없이 떠서 미러 전용이다.
 
-**매 턴이 끝날 때 ~5초 멈춤**
-정상이다. un-armed `Stop` 훅이 `grace_seconds` 동안 명령을 살핀다.
-`~/.claude/bridge/config.json`에서 낮추면 된다 (예: `2`, 또는 `0`으로 완전히
-끄기) — 훅이 매 턴 config를 다시 읽으므로 재시작 불필요. 등록된(브리지된) 세션만
-영향을 받고, 토픽이 없는 세션은 즉시 반환한다.
+**세션 응답이 그룹의 *General* 토픽에 표시됨**
+그 세션이 `bridge install-hooks` **이전에** 시작돼서 등록되지 않았다. 현재
+빌드는 등록 안 된 세션엔 `Stop` 훅이 침묵한다 — 새 `claude` 세션을 시작하면 된다.
 
 **브로커가 안 뜸: `broker already running`**
-stale pidfile이거나 진짜로 실행 중이다. 서비스를 쓰면
-`systemctl --user status claude-bridge-telegram`, 아니면
-`cat ~/.claude/bridge/state/broker.pid`. 아무것도 안 돌고 있으면
-`rm ~/.claude/bridge/state/broker.pid`.
+stale pidfile이거나 진짜 실행 중이다. `cat ~/.claude/bridge/state/broker.pid`,
+아무것도 안 돌면 `rm` 후 재시작.
 
 **브로커 코드를 수정한 뒤**
 `systemctl --user restart claude-bridge-telegram.service` (직접 실행 중이면
 `bridge restart`). 훅 스크립트는 매 호출마다 다시 읽으므로 재시작 불필요.
 
-## 이 머신 (`host`) — 현재 설정
+## 기여 / 개발
 
-이 호스트에 이미 구성된 것들. 다시 파악할 필요 없이 관리할 수 있도록 정리:
+`CLAUDE.md`에 아키텍처 불변식과 개발 규칙이 정리돼 있다. 요약:
+
+```bash
+uv sync
+uv run ruff check .
+uv run pytest
+```
+
+- 훅은 **stdlib 전용·비블로킹**. 텔레그램은 브로커만 호출.
+- `outbox` JSON 스키마를 바꾸면 훅 쪽(`_bridge_common.queue_outbox`)과
+  브로커 쪽(`_read_outbox_item`)을 같이 고칠 것.
+- 봇 토큰은 `~/.claude/bridge/config.json`에만. 커밋 전 토큰 스캔.
+
+## 이 머신 (`host`) — 현재 설정
 
 | 항목 | 위치 |
 |---|---|
-| 코드 | `~/claude-bridge-telegram/` (`.venv/`, pyenv로 빌드한 Python 3.12.14) |
+| 코드 | `~/claude-bridge-telegram/` (`.venv/`, pyenv Python 3.12.14) |
 | 런타임 상태 | `~/.claude/bridge/` |
-| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`). `delete_topic_on_end: true`, `arm_on_start: true`, `poll_minutes: 30` |
-| 훅 | `~/.claude/settings.json`에 설치됨 (SessionStart / Stop / SessionEnd). 백업: `~/.claude/settings.json.bak-*` |
-| 브로커 서비스 | `~/.config/systemd/user/claude-bridge-telegram.service`, **enabled + linger 켜짐** — 부팅 시 실행, 로그인 불필요 |
-| 셸 | `~/.zshrc`에 pyenv init 블록 추가됨 |
-
-일상 관리:
+| 설정 | `~/.claude/bridge/config.json` — 봇 `@example_bot`, 그룹 **"YourGroup"** (`chat_id -100XXXXXXXXXXX`), `delete_topic_on_end: true`. (예전 `poll_minutes`/`arm_on_start` 키는 이제 무시됨 — 지워도 됨) |
+| 훅 | `uds-messaging` 리팩터 중 `bridge uninstall-hooks`로 제거됨. 새 버전 쓰려면 `uv run bridge install-hooks` 다시 |
+| 브로커 서비스 | `~/.config/systemd/user/claude-bridge-telegram.service`, **enabled + linger** — 부팅 시 실행 |
+| 셸 | `~/.zshrc`에 pyenv init 블록 |
 
 ```bash
-systemctl --user status claude-bridge-telegram.service        # 살아있나?
-journalctl --user -u claude-bridge-telegram.service -f        # 실시간 로그
 systemctl --user restart claude-bridge-telegram.service       # 코드 변경 반영
+journalctl --user -u claude-bridge-telegram.service -f        # 실시간 로그
 ~/claude-bridge-telegram/.venv/bin/bridge status              # 브로커 + 세션별 뷰
 ```
 
-봇 토큰 교체: `~/.claude/bridge/config.json` 수정 후 서비스 재시작. 전체 제거:
+전체 제거:
 
 ```bash
 systemctl --user disable --now claude-bridge-telegram.service
 rm ~/.config/systemd/user/claude-bridge-telegram.service
-~/claude-bridge-telegram/.venv/bin/bridge uninstall-hooks     # settings.json 복원 (백업됨)
+~/claude-bridge-telegram/.venv/bin/bridge uninstall-hooks
 # 선택: loginctl disable-linger "$USER"; rm -rf ~/.claude/bridge
 ```

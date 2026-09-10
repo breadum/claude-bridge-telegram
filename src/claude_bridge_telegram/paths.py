@@ -25,16 +25,13 @@ PID_FILE = STATE / "broker.pid"
 LOG_FILE = STATE / "broker.log"
 
 REGISTER = ROOT / "register"      # session_start drops <sid>.json here
-SESSIONS = ROOT / "sessions"      # broker writes <sid>.json (label, thread_id, ...)
+SESSIONS = ROOT / "sessions"      # broker writes <sid>.json (label, thread_id, socket, ...)
 THREADS = ROOT / "threads"        # <thread_id> -> file whose content is the sid
-INBOX = ROOT / "inbox"            # <sid>.jsonl : queued commands for that session
-OUTBOX = ROOT / "outbox"          # <sid>/<ts>.txt : queued outbound messages
+INBOX = ROOT / "inbox"            # <sid>.jsonl : commands that failed to inject, awaiting retry
+OUTBOX = ROOT / "outbox"          # <sid>/<ts>.json : queued outbound messages
 END = ROOT / "end"                # session_end drops <sid>.json here
-COUNTERS = ROOT / "counters"      # <sid> -> reinjection count (loop guard)
 
-ALL_DIRS = [
-    STATE, REGISTER, SESSIONS, THREADS, INBOX, OUTBOX, END, COUNTERS,
-]
+ALL_DIRS = [STATE, REGISTER, SESSIONS, THREADS, INBOX, OUTBOX, END]
 
 
 def ensure_dirs() -> None:
@@ -56,7 +53,3 @@ def session_file(sid: str) -> Path:
 
 def thread_file(thread_id: int | str) -> Path:
     return THREADS / str(thread_id)
-
-
-def counter_file(sid: str) -> Path:
-    return COUNTERS / sid

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """SessionStart hook: register the session so the broker creates a Telegram topic.
 
-Idempotent: on `resume`/`clear` the broker sees an existing session record and
-skips creating a duplicate topic.
+Also records this session's [uds-messaging] socket + token so the broker can
+inject Telegram messages back into the running session. On `resume`/`clear` the
+session's pid (and therefore its socket path) may have changed, so we always
+re-write the register file; the broker refreshes the stored socket/token and
+does not create a second topic.
 """
 
 from __future__ import annotations
@@ -28,10 +31,6 @@ def main() -> None:
         bc.emit()
 
     bc.ensure_dirs()
-    # Don't re-register a session the broker already knows about.
-    if bc.session_file(sid).exists():
-        bc.emit()
-
     base = cwd_base(cwd)
     bc.write_json_atomic(
         bc.REGISTER / f"{sid}.json",
@@ -41,6 +40,10 @@ def main() -> None:
             "base": base,                        # topic-name prefix
             "cwd": cwd,
             "source": ev.get("source"),
+            # how the broker talks back to this running session:
+            "messaging_socket": os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET", ""),
+            "messaging_token": os.environ.get("CLAUDE_CODE_MESSAGING_TOKEN", ""),
+            "pid": os.environ.get("CLAUDE_PID", ""),
             "ts": bc.ts(),
         },
     )
