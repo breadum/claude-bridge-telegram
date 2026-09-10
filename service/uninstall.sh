@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove the systemd --user service. Does NOT touch hooks or ~/.claude/bridge.
 #
-#   ./deploy/uninstall-service.sh
+#   ./service/uninstall.sh
 set -euo pipefail
 
 UNIT="claude-bridge-telegram.service"

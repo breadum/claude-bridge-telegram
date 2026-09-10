@@ -81,9 +81,9 @@ uv run pytest
   ```
 - Don't commit to `main` directly; branch and open a PR.
 
-## Deploy
+## Running as a service
 
-`deploy/claude-bridge-telegram.service.in` is a template; `install-service.sh`
+`service/claude-bridge-telegram.service.in` is a template; `service/install.sh`
 renders `@REPO_DIR@` / `@BRIDGE_BIN@` from its own location, so the checkout can
 live anywhere. After moving the repo: `uv sync`, `bridge install-hooks`,
-`./deploy/install-service.sh` again.
+`./service/install.sh` again.

@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Paths below are filled in by deploy/install-service.sh from the repo's
+# Paths below are filled in by service/install.sh from the repo's
 # actual location, so the checkout can live anywhere (not just ~).
 WorkingDirectory=@REPO_DIR@
 ExecStart=@BRIDGE_BIN@ run
