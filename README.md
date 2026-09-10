@@ -13,7 +13,7 @@ Claude Code 세션을 텔레그램에서 조종하는 브리지. 세션마다 �
 
 | | 역할 |
 |---|---|
-| **훅** `hooks/*.py` | `SessionStart`·`UserPromptSubmit`·`Stop`·`SessionEnd` 네 이벤트에서 실행. 표준 라이브러리만 쓰고 **전부 비블로킹** — `~/.claude/bridge/`에 작은 파일 하나 쓰고 끝. |
+| **훅** `hooks/*.py` | `SessionStart`·`UserPromptSubmit`·`Stop`·`SessionEnd`·`Notification` 다섯 이벤트에서 실행. 표준 라이브러리만 쓰고 **전부 비블로킹** — `~/.claude/bridge/`에 작은 파일 하나 쓰고 끝. |
 | **브로커** `bridge` 데몬 | 텔레그램과 통신하는 **유일한** 프로세스. 토픽 생성, 응답 미러링, 그리고 텔레그램 메시지를 세션 소켓에 직접 주입. `getUpdates`를 독점하므로 세션이 여러 개 돌아도 경합이 없다. |
 
 주입 경로: Claude Code 2.x는 세션마다 유닉스 소켓(`$CLAUDE_CODE_MESSAGING_SOCKET`)을
@@ -68,7 +68,7 @@ cd claude-bridge-telegram
 uv sync                       # 락파일로 .venv 생성
 
 uv run bridge setup           # 봇 토큰 입력 → ~/.claude/bridge/config.json (chmod 600)
-uv run bridge install-hooks   # ~/.claude/settings.json에 훅 4개 추가 (절대경로, 자동 백업)
+uv run bridge install-hooks   # ~/.claude/settings.json에 훅 5개 추가 (절대경로, 자동 백업)
 ./service/install.sh          # 브로커를 systemd --user 서비스로 상시 실행
 ```
 
@@ -99,6 +99,11 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 4개 추가 (절�
   블록으로, 표현 못 하는 서식은 평문으로 떨어진다.
 - 백그라운드 작업 완료·로컬 슬래시 명령 같은 기계 발생 턴은 한 줄 이벤트(`🔔`)로
   정리되고, 순수 노이즈(빈 출력·컨텍스트 주입 블록)는 미러링하지 않는다.
+- 세션이 **입력·권한을 기다리면** (`Notification` 훅) `🔔`로 알려준다 — 예:
+  `🔔 Claude needs your permission to use Bash`. 권장 설정(`--dangerously-skip-permissions`)
+  이면 권한 프롬프트 자체가 없으니, 이 알림은 주로 Claude가 `AskUserQuestion`을
+  쓸 때 뜬다. 답은 토픽에 그냥 쓰면 프롬프트 큐에 들어간다 (선택창이 타임아웃된
+  뒤 처리). 단순 "your turn" idle 알림은 걸러진다.
 - **토픽에 메시지를 쓰면 몇 초 내로 세션에 주입된다** — 턴 중이든 idle이든. 대기·
   arm 같은 건 없다.
 - 소켓이 잠깐 안 잡히면(세션 재시작 등) 메시지는 `inbox/`에 큐잉됐다가 매 루프
@@ -191,7 +196,7 @@ journalctl --user -u claude-bridge-telegram.service -f
 ```
 <레포>/                          # 코드 — 아무 경로
   src/claude_bridge_telegram/    # 브로커, CLI, 텔레그램 클라이언트, inject, render, config
-  hooks/                         # session_start / user_prompt_submit / stop / session_end (stdlib 전용)
+  hooks/                         # session_start / user_prompt_submit / stop / session_end / notification (stdlib 전용)
   service/                       # systemd 유닛 템플릿 + install.sh / uninstall.sh
   tests/                         # pytest (네트워크·실제 ~/.claude 안 씀)
 

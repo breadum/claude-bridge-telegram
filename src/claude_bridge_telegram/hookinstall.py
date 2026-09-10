@@ -16,13 +16,14 @@ from pathlib import Path
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
 # event name -> (hook script filename, hook timeout in seconds or None for default)
-# All four hooks are non-blocking now: they drop a file under paths.ROOT and
-# exit, so the default timeout is plenty.
+# Every hook is non-blocking: it drops a file under paths.ROOT and exits, so the
+# default timeout is plenty.
 HOOKS = {
     "SessionStart": ("session_start.py", None),
     "UserPromptSubmit": ("user_prompt_submit.py", None),
     "Stop": ("stop.py", None),
     "SessionEnd": ("session_end.py", None),
+    "Notification": ("notification.py", None),
 }
 
 

@@ -1,12 +1,13 @@
 """Shared helpers for the bridge hooks.
 
 STDLIB ONLY. These scripts run from ~/.claude/settings.json with the system
-python3 on every SessionStart / UserPromptSubmit / Stop / SessionEnd, so they
-must start fast and never import the project package or third-party libs.
+python3 on every SessionStart / UserPromptSubmit / Stop / SessionEnd /
+Notification, so they must start fast and never import the project package or
+third-party libs.
 
-All four hooks are non-blocking: they write a small file under paths.ROOT and
-exit. The broker does everything else (topics, Telegram, injecting commands
-back into the session over its [uds-messaging] socket).
+Every hook is non-blocking: it writes a small file under paths.ROOT and exits.
+The broker does everything else (topics, Telegram, injecting commands back into
+the session over its [uds-messaging] socket).
 """
 
 from __future__ import annotations

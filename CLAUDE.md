@@ -8,7 +8,7 @@ Read this before editing. It records the invariants that are easy to break.
 A bridge between Claude Code sessions and a Telegram forum group: one **topic
 per session**, prompts + responses mirrored out, and Telegram messages injected
 back into the running session. No web service, no database — a single broker
-daemon plus four Claude Code hooks talking through files.
+daemon plus five Claude Code hooks talking through files.
 
 ## Architecture (do not break these)
 
@@ -44,9 +44,11 @@ daemon plus four Claude Code hooks talking through files.
 4. **File-queue contract between hook and broker:**
    - `register/<sid>.json` — session_start → broker makes/refreshes a topic
    - `sessions/<sid>.json` — broker's record (label, thread_id, socket, token, status, titled)
-   - `outbox/<sid>/<ts>.json` — `{"role": "user"|"assistant"|"note", "text": ...}`,
+   - `outbox/<sid>/<ts>.json` — `{"role": "user"|"assistant"|"note"|"event", "text": ...}`,
      optional `"ai_title"` (Claude Code's own session title, forwarded by the
-     `Stop` hook — the broker renames the topic to it once) → broker sends to the topic
+     `Stop` hook — the broker renames the topic to it once) → broker sends to the topic.
+     `event` (🔔) is what `notification.py` queues when the session wants
+     attention, and what `tidy_prompt` downgrades machine turns to.
    - `inbox/<sid>.jsonl` — commands that *failed* to inject, retried each loop
    - `end/<sid>.json` — session_end → broker marks ended / deletes topic
    Change the `outbox` JSON shape and you must change both the hook that writes
