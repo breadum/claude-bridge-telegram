@@ -31,9 +31,15 @@ daemon plus four Claude Code hooks talking through files.
    register file; `inject.py` connects to that socket, sends an `auth` frame then
    a `user` frame. This works whether the session is idle or mid-turn.
    - The session receives it as a **peer message**, not a first-person user
-     prompt. It will *not* dismiss a native tool-permission dialog. Sessions
-     driven from Telegram must run with `--dangerously-skip-permissions` (or an
-     equivalent trusted mode). This is a setup requirement, not a bug to fix.
+     prompt. Two setup requirements follow (neither is a bug to fix in the bridge):
+     1. `~/.claude/settings.json` must set `"crossSessionInbound": "accept"`.
+        Otherwise Claude Code *holds* peer messages from an unattested sender
+        when the receiving session bypasses prompts — the socket write succeeds
+        but the message never reaches the model (it lands in the transcript as a
+        "Held peer message" system notice).
+     2. Telegram-driven sessions must run with `--dangerously-skip-permissions`
+        (or an equivalent trusted mode). A peer message will *not* dismiss a
+        native tool-permission dialog.
 
 4. **File-queue contract between hook and broker:**
    - `register/<sid>.json` — session_start → broker makes/refreshes a topic

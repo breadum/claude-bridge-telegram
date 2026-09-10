@@ -35,8 +35,11 @@ Claude Code 세션을 텔레그램에서 조종하는 브리지. 세션마다 �
   않아 훅이 침묵한다.
 - **텔레그램** — Topics가 켜진 슈퍼그룹 + 봇이 그 그룹의 관리자이고 *주제
   관리(Manage Topics)* 권한 보유.
+- **`~/.claude/settings.json`에 `"crossSessionInbound": "accept"`** — 없으면
+  Claude Code가 브로커발 peer 메시지를 세션에 전달하지 않고 **보류(held)**한다
+  ([권한](#권한) 참고).
 - **주입할 세션은 `claude --dangerously-skip-permissions`로 시작** — 주입
-  메시지는 peer 프레이밍이라 네이티브 권한 프롬프트를 못 없앤다 ([권한](#권한) 참고).
+  메시지는 peer 프레이밍이라 네이티브 권한 프롬프트를 못 없앤다.
 
 ## 설치
 
@@ -67,6 +70,13 @@ uv sync                       # 락파일로 .venv 생성
 uv run bridge setup           # 봇 토큰 입력 → ~/.claude/bridge/config.json (chmod 600)
 uv run bridge install-hooks   # ~/.claude/settings.json에 훅 4개 추가 (절대경로, 자동 백업)
 ./service/install.sh          # 브로커를 systemd --user 서비스로 상시 실행
+```
+
+그리고 `~/.claude/settings.json`에 아래를 직접 추가한다 (없으면 텔레그램 메시지가
+세션에 안 들어가고 보류된다 — [권한](#권한) 참고):
+
+```json
+"crossSessionInbound": "accept"
 ```
 
 `install-hooks`와 `service/install.sh`는 스크립트 자기 위치에서 절대경로를
@@ -104,14 +114,20 @@ uv run bridge install-hooks   # ~/.claude/settings.json에 훅 4개 추가 (절�
 ### 권한
 
 브로커가 넣는 메시지는 세션에 **peer 메시지**(다른 Claude 세션발)로 도착한다 —
-1인칭 유저 입력이 아니다.
+1인칭 유저 입력이 아니다. 그래서 두 가지를 설정해야 무인 구동이 매끄럽다:
 
-- **네이티브 도구 권한 프롬프트를 못 없앤다.** 텔레그램에서 "yes"를 보내도 그
-  다이얼로그는 안 닫힌다.
-- 그래서 텔레그램으로 구동할 세션은 `--dangerously-skip-permissions`(또는 신뢰
-  폴더 + `acceptEdits` 등)로 시작해야 한다. 브리지가 못 없애는 셋업 요구사항이다.
-- 작업 지시 자체는 정상 처리되지만, 권한·설정 변경 같은 민감한 요청은 세션이
-  거절할 수 있다.
+1. **`~/.claude/settings.json`에 `"crossSessionInbound": "accept"`.**
+   기본값에서는 Claude Code가 "신원 미상 발신자 + 프롬프트를 건너뛰는 세션"
+   조합을 권한 상승으로 보고 peer 메시지를 **보류(held)**한다 — 소켓 전송은
+   성공하지만 세션엔 안 들어가고 트랜스크립트에만 남는다. `accept`로 바꾸면
+   바로 전달된다. (전역 설정: 이후 모든 세션에 적용. repo/managed 설정이
+   `hold`면 그쪽이 우선한다.)
+2. **세션을 `--dangerously-skip-permissions`(또는 신뢰 폴더 + `acceptEdits`)로
+   시작.** peer 메시지는 네이티브 도구 권한 프롬프트를 못 닫는다 — 텔레그램에서
+   "yes"를 보내도 그 다이얼로그는 안 닫힌다. 프롬프트가 아예 안 뜨게 해야 한다.
+
+작업 지시 자체는 정상 처리되지만, Claude는 peer 메시지를 낮은 신뢰도로 취급해서
+권한·설정 변경 같은 민감한 요청은 거절할 수 있다.
 
 ### 토픽 제목
 
@@ -202,10 +218,14 @@ privacy mode + 아직 관리자 아님, 또는 봇 합류 이전 메시지다. �
 **토픽에 메시지를 보내도 세션에 안 들어감**
 - 브로커가 떠 있나: `bridge status` / `systemctl --user status claude-bridge-telegram.service`
 - `/status`로 소켓 상태 확인:
-  - `ok` — 정상
+  - `ok` — 소켓은 정상. 그래도 안 들어가면 아래 "보류" 항목 확인.
   - `missing` — 세션이 재시작돼 pid가 바뀜. 세션에 프롬프트를 한 번 주면
     `SessionStart` 훅이 소켓을 갱신한다.
   - `unknown` — 그 세션이 `[uds-messaging]` 없이 떠서 미러 전용이다.
+- **보류(held)** — 세션 트랜스크립트에 `Held peer message ... crossSessionInbound`
+  가 보이면, `~/.claude/settings.json`에 `"crossSessionInbound": "accept"`가
+  없는 것이다. 추가하면 이후 메시지는 바로 전달된다 (이미 보류된 건 다시 보내거나
+  세션에서 승인).
 
 **세션 응답이 그룹의 *General* 토픽에 뜸**
 그 세션이 `bridge install-hooks` 이전에 시작돼 등록되지 않았다. 새 `claude`
